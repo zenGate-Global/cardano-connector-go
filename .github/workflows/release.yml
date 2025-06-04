@@ -1,0 +1,175 @@
+name: Release
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+  push:
+    branches: [main]
+    tags: "v[0-9]+.[0-9]+.[0-9]+**" # Ex. v0.1.0 v0.1.1-rc2
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GO_VERSION: "1.24"
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}-${{ github.actor }}
+  cancel-in-progress: true
+
+jobs:
+  pre_release:
+    name: Pre-release build
+    runs-on: ubuntu-latest
+    outputs:
+      VERSION: ${{ steps.output-version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          cache: false
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin
+          key: pre-release-${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Build artifacts (test)
+        if: github.event_name != 'push' || !contains(github.ref, 'refs/tags/')
+        run: |
+          VERSION=${{ github.sha }}
+          mkdir -p dist
+
+          # Build for Linux
+          GOOS=linux GOARCH=amd64 go build -v -o dist/cardano-connector-go-linux-amd64
+          chmod +x dist/cardano-connector-go-linux-amd64
+          tar czf dist/cardano-connector-go_${VERSION}_linux_amd64.tar.gz -C dist cardano-connector-go-linux-amd64
+
+          # Build for macOS
+          GOOS=darwin GOARCH=amd64 go build -v -o dist/cardano-connector-go-darwin-amd64
+          chmod +x dist/cardano-connector-go-darwin-amd64
+          tar czf dist/cardano-connector-go_${VERSION}_darwin_amd64.tar.gz -C dist cardano-connector-go-darwin-amd64
+
+          # Build for Windows
+          GOOS=windows GOARCH=amd64 go build -v -o dist/cardano-connector-go-windows-amd64.exe
+          zip dist/cardano-connector-go_${VERSION}_windows_amd64.zip dist/cardano-connector-go-windows-amd64.exe
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build artifacts (release)
+        if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          mkdir -p dist
+
+          # Build for Linux
+          GOOS=linux GOARCH=amd64 go build -v -o dist/cardano-connector-go-linux-amd64
+          chmod +x dist/cardano-connector-go-linux-amd64
+          tar czf dist/cardano-connector-go_${VERSION}_linux_amd64.tar.gz -C dist cardano-connector-go-linux-amd64
+
+          # Build for macOS
+          GOOS=darwin GOARCH=amd64 go build -v -o dist/cardano-connector-go-darwin-amd64
+          chmod +x dist/cardano-connector-go-darwin-amd64
+          tar czf dist/cardano-connector-go_${VERSION}_darwin_amd64.tar.gz -C dist cardano-connector-go-darwin-amd64
+
+          # Build for Windows
+          GOOS=windows GOARCH=amd64 go build -v -o dist/cardano-connector-go-windows-amd64.exe
+          zip dist/cardano-connector-go_${VERSION}_windows_amd64.zip dist/cardano-connector-go-windows-amd64.exe
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - id: output-version
+        run: echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          enableCrossOsArchive: true
+          key: release-artifacts-${{ github.run_id }}
+          path: dist/
+
+  pre_release_test:
+    needs: pre_release
+    name: Pre-release test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          fail-on-cache-miss: true
+          enableCrossOsArchive: true
+          key: release-artifacts-${{ github.run_id }}
+          path: dist/
+
+      - name: Test (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          tar xf dist/cardano-connector-go_${{ needs.pre_release.outputs.VERSION }}_linux_amd64.tar.gz
+          test -f cardano-connector-go-linux-amd64
+
+      - name: Test (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          tar xf dist/cardano-connector-go_${{ needs.pre_release.outputs.VERSION }}_darwin_amd64.tar.gz
+          test -f cardano-connector-go-darwin-amd64
+
+      - name: Test (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Expand-Archive -Force dist/cardano-connector-go_${{ needs.pre_release.outputs.VERSION }}_windows_amd64.zip
+          if (!(Test-Path dist/cardano-connector-go-windows-amd64.exe)) { exit 1 }
+
+  release:
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+    needs: pre_release_test
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          fail-on-cache-miss: true
+          enableCrossOsArchive: true
+          key: release-artifacts-${{ github.run_id }}
+          path: dist/
+
+      - name: Generate Release Notes
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          {
+            echo "# cardano-connector-go ${tag}"
+            echo ""
+            echo "## Changes"
+            git log --pretty=format:"* %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD
+          } > release-notes.txt
+
+      - name: Create release
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create ${tag} \
+            --notes-file release-notes.txt \
+            --title "cardano-connector-go ${tag}" \
+            dist/cardano-connector-go_${tag#v}_linux_amd64.tar.gz \
+            dist/cardano-connector-go_${tag#v}_darwin_amd64.tar.gz \
+            dist/cardano-connector-go_${tag#v}_windows_amd64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
