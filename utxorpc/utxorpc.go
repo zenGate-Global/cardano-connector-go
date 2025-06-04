@@ -14,8 +14,8 @@ import (
 	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	connector "github.com/mgpai22/cardano-connector-go"
 	utxorpc_sdk "github.com/utxorpc/go-sdk"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 type UtxorpcProvider struct {

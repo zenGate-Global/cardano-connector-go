@@ -12,8 +12,8 @@ import (
 	"github.com/Salvionied/cbor/v2"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
-	connector "github.com/mgpai22/cardano-connector-go"
-	tests "github.com/mgpai22/cardano-connector-go/tests"
+	connector "github.com/zenGate-Global/cardano-connector-go"
+	tests "github.com/zenGate-Global/cardano-connector-go/tests"
 )
 
 // compareRedeemers compares two slices of EvalRedeemer in an order-independent way

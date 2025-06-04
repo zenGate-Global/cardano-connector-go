@@ -1,4 +1,4 @@
-module github.com/mgpai22/cardano-connector-go
+module github.com/zenGate-Global/cardano-connector-go
 
 go 1.24.0
 

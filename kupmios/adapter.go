@@ -29,7 +29,7 @@ import (
 	"github.com/SundaeSwap-finance/ogmigo/v6"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync/num"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 // parseKupoScript converts Kupo's script response to Apollo's ScriptRef

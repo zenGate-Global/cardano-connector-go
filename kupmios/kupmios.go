@@ -18,7 +18,7 @@ import (
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync/num"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 var _ connector.Provider = (*KupmiosProvider)(nil)

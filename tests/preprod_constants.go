@@ -17,7 +17,7 @@ import (
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/serialization/Value"
 	"github.com/Salvionied/cbor/v2"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 func assetsToApolloValue(lovelace int64, assets map[string]int64) Value.Value {

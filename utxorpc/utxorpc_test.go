@@ -11,7 +11,7 @@ import (
 
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/cbor/v2"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 // compareRedeemers compares two slices of EvalRedeemer in an order-independent way

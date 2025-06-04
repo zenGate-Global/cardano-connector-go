@@ -16,7 +16,7 @@ import (
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 const (

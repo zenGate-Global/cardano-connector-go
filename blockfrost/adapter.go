@@ -22,7 +22,7 @@ import (
 	"github.com/Salvionied/apollo/serialization/Value"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
-	connector "github.com/mgpai22/cardano-connector-go"
+	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 // adaptBlockfrostAddressUTxOs converts Blockfrost address UTxOs to Apollo UTxOs
