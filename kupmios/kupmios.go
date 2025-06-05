@@ -59,6 +59,39 @@ func (kp *KupmiosProvider) GetProtocolParameters(
 	return adaptOgmigoProtocolParamsToConnectorParams(ogmiosParams), nil
 }
 
+func (kp *KupmiosProvider) GetTip(ctx context.Context) (connector.Tip, error) {
+	ogmigoTip, err := kp.ogmigoClient.ChainTip(ctx)
+	fmt.Printf("ogmigoTip: %+v\n", ogmigoTip)
+	if err != nil {
+		return connector.Tip{}, fmt.Errorf(
+			"kupmios: failed to get tip: %w",
+			err,
+		)
+	}
+
+	ogmigoTipStruct, ok := ogmigoTip.PointStruct()
+	if !ok {
+		return connector.Tip{}, fmt.Errorf(
+			"kupmios: failed to get tip: %w",
+			err,
+		)
+	}
+
+	ogmigoHeight, err := kp.ogmigoClient.BlockHeight(ctx)
+	if err != nil {
+		return connector.Tip{}, fmt.Errorf(
+			"kupmios: failed to get block height: %w",
+			err,
+		)
+	}
+
+	return connector.Tip{
+		Slot:   ogmigoTipStruct.Slot,
+		Height: ogmigoHeight,
+		Hash:   ogmigoTipStruct.ID,
+	}, nil
+}
+
 func (kp *KupmiosProvider) GetUtxosByAddress(
 	ctx context.Context,
 	addr string,

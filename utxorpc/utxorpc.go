@@ -14,6 +14,7 @@ import (
 	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/submit"
 	utxorpc_sdk "github.com/utxorpc/go-sdk"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
@@ -45,7 +46,7 @@ func New(config Config) (*UtxorpcProvider, error) {
 func (u *UtxorpcProvider) GetProtocolParameters(
 	ctx context.Context,
 ) (Base.ProtocolParameters, error) {
-	paramsResponse, err := u.client.ReadParams()
+	paramsResponse, err := u.client.ReadParamsWithContext(ctx)
 	if err != nil {
 		return Base.ProtocolParameters{}, fmt.Errorf(
 			"utxorpc: ReadParams failed: %w",
@@ -153,6 +154,21 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 	return pp, nil
 }
 
+func (u *UtxorpcProvider) GetTip(ctx context.Context) (connector.Tip, error) {
+	tip, err := u.client.ReadTipWithContext(ctx)
+	if err != nil {
+		return connector.Tip{}, fmt.Errorf(
+			"utxorpc: failed to get tip: %w",
+			err,
+		)
+	}
+	return connector.Tip{
+		Slot:   tip.Slot,
+		Height: tip.Height,
+		Hash:   tip.Hash,
+	}, nil
+}
+
 func (u *UtxorpcProvider) GetUtxosByAddress(
 	ctx context.Context,
 	addr string,
@@ -168,50 +184,40 @@ func (u *UtxorpcProvider) GetUtxosByAddress(
 	addrBytes := addrObj.Bytes()
 
 	ret := []UTxO.UTxO{}
-	var startToken *string
-	maxItems := int32(100)
 
-	for {
-		resp, err := u.client.GetUtxosByAddress(
-			addrBytes,
-			&maxItems,
-			startToken,
-			ctx,
+	resp, err := u.client.GetUtxosByAddressWithAssetWithContext(
+		ctx,
+		addrBytes,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return ret, fmt.Errorf(
+			"utxorpc: GetUtxosByAddress failed: %w",
+			convertGRPCError(err),
 		)
+	}
+
+	if resp.Msg == nil {
+		return ret, nil
+	}
+
+	for _, item := range resp.Msg.GetItems() {
+		var tmpUtxo UTxO.UTxO
+		tmpUtxo.Input = TransactionInput.TransactionInput{
+			TransactionId: item.GetTxoRef().GetHash(),
+			Index:         int(item.GetTxoRef().GetIndex()),
+		}
+		tmpOutput := TransactionOutput.TransactionOutput{}
+		err = tmpOutput.UnmarshalCBOR(item.GetNativeBytes())
 		if err != nil {
 			return ret, fmt.Errorf(
-				"utxorpc: GetUtxosByAddress failed: %w",
-				convertGRPCError(err),
+				"utxorpc: failed to unmarshal UTxO output: %w",
+				err,
 			)
 		}
-
-		if resp.Msg == nil {
-			break
-		}
-
-		for _, item := range resp.Msg.GetItems() {
-			var tmpUtxo UTxO.UTxO
-			tmpUtxo.Input = TransactionInput.TransactionInput{
-				TransactionId: item.GetTxoRef().GetHash(),
-				Index:         int(item.GetTxoRef().GetIndex()),
-			}
-			tmpOutput := TransactionOutput.TransactionOutput{}
-			err = tmpOutput.UnmarshalCBOR(item.GetNativeBytes())
-			if err != nil {
-				return ret, fmt.Errorf(
-					"utxorpc: failed to unmarshal UTxO output: %w",
-					err,
-				)
-			}
-			tmpUtxo.Output = tmpOutput
-			ret = append(ret, tmpUtxo)
-		}
-
-		if resp.Msg.GetNextToken() == "" {
-			break
-		}
-		nextToken := resp.Msg.GetNextToken()
-		startToken = &nextToken
+		tmpUtxo.Output = tmpOutput
+		ret = append(ret, tmpUtxo)
 	}
 
 	return ret, nil
@@ -245,52 +251,39 @@ func (u *UtxorpcProvider) GetUtxosWithUnit(
 	}
 
 	ret := []UTxO.UTxO{}
-	var startToken *string
-	maxItems := int32(100)
 
-	for {
-		resp, err := u.client.GetUtxosByAddressWithAsset(
-			addrBytes,
-			nil,
-			unitBytes,
-			&maxItems,
-			startToken,
-			ctx,
+	resp, err := u.client.GetUtxosByAddressWithAssetWithContext(ctx,
+		addrBytes,
+		nil,
+		unitBytes,
+	)
+	if err != nil {
+		return ret, fmt.Errorf(
+			"utxorpc: GetUtxosByAddressWithAsset failed: %w",
+			convertGRPCError(err),
 		)
+	}
+
+	if resp.Msg == nil {
+		return ret, nil
+	}
+
+	for _, item := range resp.Msg.GetItems() {
+		var tmpUtxo UTxO.UTxO
+		tmpUtxo.Input = TransactionInput.TransactionInput{
+			TransactionId: item.GetTxoRef().GetHash(),
+			Index:         int(item.GetTxoRef().GetIndex()),
+		}
+		tmpOutput := TransactionOutput.TransactionOutput{}
+		err = tmpOutput.UnmarshalCBOR(item.GetNativeBytes())
 		if err != nil {
 			return ret, fmt.Errorf(
-				"utxorpc: GetUtxosByAddressWithAsset failed: %w",
-				convertGRPCError(err),
+				"utxorpc: failed to unmarshal UTxO output: %w",
+				err,
 			)
 		}
-
-		if resp.Msg == nil {
-			break
-		}
-
-		for _, item := range resp.Msg.GetItems() {
-			var tmpUtxo UTxO.UTxO
-			tmpUtxo.Input = TransactionInput.TransactionInput{
-				TransactionId: item.GetTxoRef().GetHash(),
-				Index:         int(item.GetTxoRef().GetIndex()),
-			}
-			tmpOutput := TransactionOutput.TransactionOutput{}
-			err = tmpOutput.UnmarshalCBOR(item.GetNativeBytes())
-			if err != nil {
-				return ret, fmt.Errorf(
-					"utxorpc: failed to unmarshal UTxO output: %w",
-					err,
-				)
-			}
-			tmpUtxo.Output = tmpOutput
-			ret = append(ret, tmpUtxo)
-		}
-
-		if resp.Msg.GetNextToken() == "" {
-			break
-		}
-		nextToken := resp.Msg.GetNextToken()
-		startToken = &nextToken
+		tmpUtxo.Output = tmpOutput
+		ret = append(ret, tmpUtxo)
 	}
 
 	return ret, nil
@@ -312,13 +305,10 @@ func (u *UtxorpcProvider) GetUtxoByUnit(
 		return nil, err
 	}
 
-	maxItems := int32(2)
-	resp, err := u.client.GetUtxosByAsset(
+	resp, err := u.client.GetUtxosByAssetWithContext(
+		ctx,
 		nil,
 		unitBytes,
-		&maxItems,
-		nil,
-		ctx,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -376,7 +366,7 @@ func (u *UtxorpcProvider) GetUtxosByOutRef(
 		}
 	}
 
-	resp, err := u.client.GetUtxosByRefs(txoRefs, nil, ctx)
+	resp, err := u.client.GetUtxosByRefsWithContext(ctx, txoRefs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +435,16 @@ func (u *UtxorpcProvider) SubmitTx(
 	ctx context.Context,
 	tx []byte,
 ) (string, error) {
-	resp, err := u.client.SubmitTx(hex.EncodeToString(tx), ctx)
+	txn := &submit.AnyChainTx{
+		Type: &submit.AnyChainTx_Raw{
+			Raw: tx,
+		},
+	}
+
+	req := &submit.SubmitTxRequest{
+		Tx: []*submit.AnyChainTx{txn},
+	}
+	resp, err := u.client.SubmitTxWithContext(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("utxorpc: SubmitTx failed: %w", err)
 	}
@@ -464,7 +463,17 @@ func (u *UtxorpcProvider) EvaluateTx(
 		)
 	}
 
-	res, err := u.client.EvalTx(hex.EncodeToString(tx), ctx)
+	txn := &submit.AnyChainTx{
+		Type: &submit.AnyChainTx_Raw{
+			Raw: tx,
+		},
+	}
+
+	req := &submit.EvalTxRequest{
+		Tx: []*submit.AnyChainTx{txn},
+	}
+
+	res, err := u.client.EvalTxWithContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("utxorpc: EvaluateTx failed: %w", err)
 	}

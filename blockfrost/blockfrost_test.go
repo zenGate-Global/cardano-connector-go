@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Salvionied/cbor/v2"
+	"github.com/tj/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	tests "github.com/zenGate-Global/cardano-connector-go/tests"
 )
@@ -83,6 +84,26 @@ func TestGetProtocolParameters(t *testing.T) {
 	if pp.MaxTxSize == 0 {
 		t.Error("Expected non-zero MaxTxSize")
 	}
+}
+
+func TestGetTip(t *testing.T) {
+	bf := setupBlockfrost(t)
+	ctx := context.Background()
+
+	tip, err := bf.GetTip(ctx)
+	if err != nil {
+		t.Fatalf("GetTip failed: %v", err)
+	}
+
+	t.Logf("Tip: %+v", tip)
+
+	assert.True(t, tip.Slot > 93412488, "Slot should be greater than 93412488")
+	assert.True(
+		t,
+		tip.Height > 3548804,
+		"Height should be greater than 3548804",
+	)
+	assert.True(t, len(tip.Hash) == 64, "Hash should be 64 characters long")
 }
 
 func TestGetUtxos(t *testing.T) {

@@ -28,9 +28,18 @@ type EvalRedeemer struct {
 	ExUnits Redeemer.ExecutionUnits `json:"ex_units"`
 }
 
+type Tip struct {
+	Slot   uint64 `json:"slot"`
+	Height uint64 `json:"height"`
+	Hash   string `json:"hash"`
+}
+
 type Provider interface {
 	// GetProtocolParameters fetches the current protocol parameters.
 	GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error)
+
+	// GetTip fetches the current tip of the blockchain.
+	GetTip(ctx context.Context) (Tip, error)
 
 	// GetUtxosByAddress queries UTxOs by a Bech32 address.
 	GetUtxosByAddress(ctx context.Context, addr string) ([]UTxO.UTxO, error)

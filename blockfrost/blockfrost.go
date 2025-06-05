@@ -84,6 +84,27 @@ func (b *BlockfrostProvider) GetProtocolParameters(
 	return bfParams.ToBaseParams(), nil
 }
 
+func (b *BlockfrostProvider) GetTip(
+	ctx context.Context,
+) (connector.Tip, error) {
+	var bfTip struct {
+		Height uint64 `json:"height"`
+		Hash   string `json:"hash"`
+		Slot   uint64 `json:"slot"`
+	}
+	path := "/blocks/latest"
+
+	err := b.doRequest(ctx, "GET", path, nil, &bfTip)
+	if err != nil {
+		return connector.Tip{}, fmt.Errorf("failed to get tip: %w", err)
+	}
+	return connector.Tip{
+		Slot:   bfTip.Slot,
+		Height: bfTip.Height,
+		Hash:   bfTip.Hash,
+	}, nil
+}
+
 func (b *BlockfrostProvider) doRequest(
 	ctx context.Context,
 	method, path string,
