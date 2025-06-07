@@ -10,7 +10,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.16.0
-	github.com/utxorpc/go-sdk v0.0.0-20250528145820-748c177d7090
+	github.com/utxorpc/go-sdk v0.0.0-20250606094115-4f30dada2a5f
 )
 
 require (
@@ -37,4 +37,4 @@ replace github.com/SundaeSwap-finance/ogmigo/v6 => github.com/mgpai22/ogmigo/v6 
 
 replace github.com/SundaeSwap-finance/kugo => github.com/mgpai22/kugo v1.2.1
 
-replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
+// replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
