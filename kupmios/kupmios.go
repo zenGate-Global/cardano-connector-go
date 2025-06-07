@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Salvionied/apollo/serialization/PlutusData"
+	"github.com/Salvionied/apollo/serialization/Redeemer"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
@@ -34,6 +35,7 @@ func New(config Config) (*KupmiosProvider, error) {
 	return &KupmiosProvider{
 		ogmigoClient: ogmiosClient,
 		kugoClient:   kugoClient,
+		networkId:    config.NetworkId,
 	}, nil
 }
 
@@ -57,6 +59,41 @@ func (kp *KupmiosProvider) GetProtocolParameters(
 	}
 
 	return adaptOgmigoProtocolParamsToConnectorParams(ogmiosParams), nil
+}
+
+func (kp *KupmiosProvider) GetGenesisParams(
+	ctx context.Context,
+) (Base.GenesisParameters, error) {
+	shelleyGenesisParams, err := kp.ogmigoClient.GenesisConfig(ctx, "shelley")
+	if err != nil {
+		return Base.GenesisParameters{}, fmt.Errorf(
+			"kupmios: failed to get shelley genesis parameters: %w",
+			err,
+		)
+	}
+
+	var shelleyGenesis ShelleyGenesisParams
+	if err := json.Unmarshal(shelleyGenesisParams, &shelleyGenesis); err != nil {
+		return Base.GenesisParameters{}, fmt.Errorf(
+			"kupmios: failed to parse shelley genesis parameters: %w",
+			err,
+		)
+	}
+
+	return adaptShelleyGenesisToConnectorParams(shelleyGenesis), nil
+}
+
+func (kp *KupmiosProvider) Network() int {
+	return kp.networkId
+}
+
+func (kp *KupmiosProvider) Epoch(ctx context.Context) (int, error) {
+	ogmigoEpoch, err := kp.ogmigoClient.CurrentEpoch(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get current epoch: %w", err)
+	}
+
+	return int(ogmigoEpoch), nil
 }
 
 func (kp *KupmiosProvider) GetTip(ctx context.Context) (connector.Tip, error) {
@@ -580,7 +617,7 @@ func (kp *KupmiosProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
 	additionalUTxOs []UTxO.UTxO,
-) ([]connector.EvalRedeemer, error) {
+) (map[string]Redeemer.ExecutionUnits, error) {
 	if len(additionalUTxOs) > 0 {
 
 		ogmigoUTxOs := make([]shared.Utxo, len(additionalUTxOs))
@@ -616,6 +653,22 @@ func (kp *KupmiosProvider) EvaluateTx(
 	}
 
 	return adaptOgmigoEvalResult(ogmigoEvalResult)
+}
+
+func (kp *KupmiosProvider) GetScriptCborByScriptHash(
+	ctx context.Context,
+	scriptHash string,
+) (string, error) {
+	scriptCbor, err := kp.kugoClient.Script(ctx, scriptHash)
+	if err != nil {
+		return "", fmt.Errorf(
+			"kupmios: Kupo request for script %s failed: %w",
+			scriptHash,
+			err,
+		)
+	}
+
+	return scriptCbor.Script, nil
 }
 
 func parseUnit(

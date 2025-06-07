@@ -11,6 +11,7 @@ type BlockfrostProvider struct {
 	baseURL                   string
 	projectID                 string
 	networkName               string // e.g., "mainnet", "preprod" (used for default URL)
+	networkId                 int
 	customSubmissionEndpoints []string
 }
 
@@ -62,6 +63,7 @@ type bfScriptCbor struct {
 type Config struct {
 	ProjectID                 string
 	NetworkName               string // e.g., "mainnet", "preprod", "preview"
+	NetworkId                 int
 	BaseURL                   string // Optional: if you need to override default Blockfrost URL
 	HTTPClient                *http.Client
 	CustomSubmissionEndpoints []string // For custom tx submission
@@ -117,6 +119,19 @@ type BlockfrostProtocolParameters struct {
 	MinFeeReferenceScriptsMultiplier int                         `json:"min_fee_reference_scripts_multiplier"`
 }
 
+type BlockfrostGenesisParameters struct {
+	ActiveSlotsCoefficient float32 `json:"active_slots_coefficient"`
+	UpdateQuorum           int     `json:"update_quorum"`
+	MaxLovelaceSupply      string  `json:"max_lovelace_supply"`
+	NetworkMagic           int     `json:"network_magic"`
+	EpochLength            int     `json:"epoch_length"`
+	SystemStart            int     `json:"system_start"`
+	SlotsPerKesPeriod      int     `json:"slots_per_kes_period"`
+	SlotLength             int     `json:"slot_length"`
+	MaxKesEvolutions       int     `json:"max_kes_evolutions"`
+	SecurityParam          int     `json:"security_param"`
+}
+
 type BlockfrostUTXO struct {
 	// Transaction hash of the UTXO
 	Address string `json:"address"`
@@ -133,4 +148,17 @@ type BlockfrostUTXO struct {
 	DataHash            string `json:"data_hash"`
 	InlineDatum         string `json:"inline_datum"`
 	ReferenceScriptHash string `json:"reference_script_hash"`
+}
+
+type BlockfrostEpoch struct {
+	Epoch          int    `json:"epoch"`
+	StartTime      int64  `json:"start_time"`
+	EndTime        int64  `json:"end_time"`
+	FirstBlockTime int64  `json:"first_block_time"`
+	LastBlockTime  int64  `json:"last_block_time"`
+	BlockCount     int    `json:"block_count"`
+	TxCount        int    `json:"tx_count"`
+	Output         string `json:"output"`
+	Fees           string `json:"fees"`
+	ActiveStake    string `json:"active_stake"`
 }

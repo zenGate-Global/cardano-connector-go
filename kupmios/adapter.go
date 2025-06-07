@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Salvionied/apollo/serialization/Address"
 	"github.com/Salvionied/apollo/serialization/Amount"
@@ -29,7 +30,6 @@ import (
 	"github.com/SundaeSwap-finance/ogmigo/v6"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync/num"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
-	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 // parseKupoScript converts Kupo's script response to Apollo's ScriptRef
@@ -429,7 +429,7 @@ func scriptRef_OgmigoToApollo(
 
 func adaptOgmigoEvalResult(
 	ogmigoEval *ogmigo.EvaluateTxResponse,
-) ([]connector.EvalRedeemer, error) {
+) (map[string]Redeemer.ExecutionUnits, error) {
 	if ogmigoEval.Error != nil {
 		fmt.Printf(
 			"Ogmios evaluation error (code %d): %s\n",
@@ -449,31 +449,24 @@ func adaptOgmigoEvalResult(
 		)
 	}
 
-	results := make([]connector.EvalRedeemer, 0, len(ogmigoEval.ExUnits))
+	results := make(map[string]Redeemer.ExecutionUnits)
 	for _, e := range ogmigoEval.ExUnits {
-		var tag Redeemer.RedeemerTag
-
-		switch strings.ToLower(e.Validator.Purpose) {
-		case "spend":
-			tag = Redeemer.SPEND
-		case "mint":
-			tag = Redeemer.MINT
+		purpose := strings.ToLower(e.Validator.Purpose)
+		switch purpose {
+		case "spend", "mint":
+			// These are already in the correct format
 		case "certificate", "cert":
-			tag = Redeemer.CERT
+			purpose = "certificate"
 		case "withdrawal", "reward":
-			tag = Redeemer.REWARD
+			purpose = "withdrawal"
 		default:
 			continue
 		}
 
-		results = append(results, connector.EvalRedeemer{
-			Tag:   tag,
-			Index: uint32(e.Validator.Index),
-			ExUnits: Redeemer.ExecutionUnits{
-				Mem:   int64(e.Budget.Memory),
-				Steps: int64(e.Budget.Cpu),
-			},
-		})
+		results[fmt.Sprintf("%s:%d", purpose, e.Validator.Index)] = Redeemer.ExecutionUnits{
+			Mem:   int64(e.Budget.Memory),
+			Steps: int64(e.Budget.Cpu),
+		}
 	}
 	return results, nil
 }
@@ -502,4 +495,56 @@ func adaptOgmigoUtxoToApollo(u shared.Utxo) UTxO.UTxO {
 			IsPostAlonzo: true,
 		},
 	}
+}
+
+func adaptShelleyGenesisToConnectorParams(
+	shelley ShelleyGenesisParams,
+) Base.GenesisParameters {
+	// Convert startTime to Unix timestamp
+	var systemStart int
+	if startTime, err := time.Parse("2006-01-02T15:04:05Z", shelley.StartTime); err == nil {
+		systemStart = int(startTime.Unix())
+	}
+
+	// Parse active slots coefficient fraction (e.g., "1/20" -> 0.05)
+	activeSlotsCoeff := parseFraction(shelley.ActiveSlotsCoefficient)
+
+	// Convert slot length from milliseconds to seconds
+	slotLength := shelley.SlotLength.Milliseconds / 1000
+
+	return Base.GenesisParameters{
+		ActiveSlotsCoefficient: activeSlotsCoeff,
+		UpdateQuorum:           shelley.UpdateQuorum,
+		MaxLovelaceSupply: strconv.FormatInt(
+			shelley.MaxLovelaceSupply,
+			10,
+		),
+		NetworkMagic:      shelley.NetworkMagic,
+		EpochLength:       shelley.EpochLength,
+		SystemStart:       systemStart,
+		SlotsPerKesPeriod: shelley.SlotsPerKesPeriod,
+		SlotLength:        slotLength,
+		MaxKesEvolutions:  shelley.MaxKesEvolutions,
+		SecurityParam:     shelley.SecurityParameter,
+	}
+}
+
+func parseFraction(fraction string) float32 {
+	if fraction == "" {
+		return 0
+	}
+
+	parts := strings.Split(fraction, "/")
+	if len(parts) != 2 {
+		return 0
+	}
+
+	numerator, err1 := strconv.ParseFloat(parts[0], 32)
+	denominator, err2 := strconv.ParseFloat(parts[1], 32)
+
+	if err1 != nil || err2 != nil || denominator == 0 {
+		return 0
+	}
+
+	return float32(numerator / denominator)
 }

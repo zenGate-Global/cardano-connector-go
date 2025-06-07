@@ -10,22 +10,26 @@ import (
 
 	"github.com/Salvionied/apollo/serialization/Address"
 	"github.com/Salvionied/apollo/serialization/PlutusData"
+	"github.com/Salvionied/apollo/serialization/Redeemer"
 	"github.com/Salvionied/apollo/serialization/TransactionInput"
 	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/query"
 	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/submit"
 	utxorpc_sdk "github.com/utxorpc/go-sdk"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 type UtxorpcProvider struct {
-	client *utxorpc_sdk.UtxorpcClient
+	client    *utxorpc_sdk.UtxorpcClient
+	networkId int
 }
 
 type Config struct {
-	BaseUrl string
-	ApiKey  string
+	BaseUrl   string
+	ApiKey    string
+	NetworkId int
 }
 
 var _ connector.Provider = (*UtxorpcProvider)(nil)
@@ -37,7 +41,8 @@ func New(config Config) (*UtxorpcProvider, error) {
 	}
 
 	provider := &UtxorpcProvider{
-		client: client,
+		client:    client,
+		networkId: config.NetworkId,
 	}
 
 	return provider, nil
@@ -154,18 +159,57 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 	return pp, nil
 }
 
+func (u *UtxorpcProvider) GetGenesisParams(
+	ctx context.Context,
+) (Base.GenesisParameters, error) {
+	return Base.GenesisParameters{}, connector.ErrNotImplemented
+}
+
+func (u *UtxorpcProvider) Network() int {
+	return u.networkId
+}
+
+func (u *UtxorpcProvider) Epoch(ctx context.Context) (int, error) {
+	return 0, connector.ErrNotImplemented
+}
+
 func (u *UtxorpcProvider) GetTip(ctx context.Context) (connector.Tip, error) {
-	tip, err := u.client.ReadTipWithContext(ctx)
+	tipResp, err := u.client.ReadTipWithContext(ctx)
 	if err != nil {
 		return connector.Tip{}, fmt.Errorf(
 			"utxorpc: failed to get tip: %w",
 			err,
 		)
 	}
+
+	if tipResp.Msg == nil || tipResp.Msg.GetTip() == nil {
+		return connector.Tip{}, errors.New(
+			"received nil tip from ReadTipResponse",
+		)
+	}
+	blockRef := tipResp.Msg.GetTip()
+
+	blockResp, err := u.client.ReadBlockWithContext(ctx, blockRef)
+	if err != nil {
+		return connector.Tip{}, fmt.Errorf(
+			"utxorpc: failed to get block: %w",
+			err,
+		)
+	}
+
+	if blockResp.Msg == nil || len(blockResp.Msg.GetBlock()) == 0 ||
+		blockResp.Msg.GetBlock()[0] == nil {
+		return connector.Tip{}, errors.New(
+			"received nil or empty block data from FetchBlockResponse for tip",
+		)
+	}
+
+	block := blockResp.Msg.GetBlock()[0]
+
 	return connector.Tip{
-		Slot:   tip.Slot,
-		Height: tip.Height,
-		Hash:   tip.Hash,
+		Slot:   blockRef.GetIndex(),
+		Height: block.GetCardano().GetHeader().GetHeight(),
+		Hash:   hex.EncodeToString(blockRef.GetHash()),
 	}, nil
 }
 
@@ -358,15 +402,19 @@ func (u *UtxorpcProvider) GetUtxosByOutRef(
 	ctx context.Context,
 	outRefs []connector.OutRef,
 ) ([]UTxO.UTxO, error) {
-	txoRefs := make([]utxorpc_sdk.TxoReference, len(outRefs))
+	txoRefsPtr := make([]*query.TxoRef, len(outRefs))
 	for i, ref := range outRefs {
-		txoRefs[i] = utxorpc_sdk.TxoReference{
-			TxHash: ref.TxHash,
-			Index:  ref.Index,
+		hash, err := hex.DecodeString(ref.TxHash)
+		if err != nil {
+			return nil, err
+		}
+		txoRefsPtr[i] = &query.TxoRef{
+			Hash:  hash,
+			Index: ref.Index,
 		}
 	}
 
-	resp, err := u.client.GetUtxosByRefsWithContext(ctx, txoRefs, nil)
+	resp, err := u.client.GetUtxosByRefsWithContext(ctx, txoRefsPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +504,7 @@ func (u *UtxorpcProvider) EvaluateTx(
 	ctx context.Context,
 	tx []byte,
 	additionalUTxOs []UTxO.UTxO,
-) ([]connector.EvalRedeemer, error) {
+) (map[string]Redeemer.ExecutionUnits, error) {
 	if len(additionalUTxOs) > 0 {
 		return nil, errors.New(
 			"utxorpc: EvaluateTx does not support additional UTxOs",
@@ -475,30 +523,44 @@ func (u *UtxorpcProvider) EvaluateTx(
 
 	res, err := u.client.EvalTxWithContext(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("utxorpc: EvaluateTx failed: %w", err)
+		return map[string]Redeemer.ExecutionUnits{}, err
 	}
 
-	reports := res.Msg.GetReport()
-
-	for _, report := range reports {
-		for _, error := range report.GetCardano().GetErrors() {
-			return nil, fmt.Errorf("utxorpc: EvaluateTx failed: %s", error)
+	resp := make(map[string]Redeemer.ExecutionUnits)
+	// Use single report since we know we have 1 Tx to eval
+	redeemers := res.Msg.GetReport()[0].GetCardano().GetRedeemers()
+	for _, r := range redeemers {
+		purpose := r.GetPurpose().String()
+		switch purpose {
+		case "REDEEMER_PURPOSE_SPEND":
+			purpose = "spend"
+		case "REDEEMER_PURPOSE_MINT":
+			purpose = "mint"
+		case "REDEEMER_PURPOSE_CERT":
+			purpose = "certificate"
+		case "REDEEMER_PURPOSE_REWARD":
+			purpose = "withdrawal"
+		case "REDEEMER_PURPOSE_VOTE":
+			purpose = "vote"
+		case "REDEEMER_PURPOSE_PROPOSE":
+			purpose = "proposal"
+		default:
+			return resp, errors.New("unknown purpose")
 		}
-		for _, redeemer := range report.GetCardano().GetRedeemers() {
-			fmt.Printf(
-				"utxorpc: EvaluateTx redeemer execution units: %v, purpose: %v, index: %v\n",
-				redeemer.GetExUnits(),
-				redeemer.GetPurpose(),
-				redeemer.GetIndex(),
-			)
+		units := r.GetExUnits()
+		resp[fmt.Sprintf("%s:%d", purpose, r.GetIndex())] = Redeemer.ExecutionUnits{
+			Steps: int64(units.GetSteps()),
+			Mem:   int64(units.GetMemory()),
 		}
-		fmt.Printf(
-			"utxorpc: EvaluateTx fee: %v\n",
-			report.GetCardano().GetFee(),
-		)
 	}
+	return resp, nil
+}
 
-	return nil, connector.ErrNotImplemented
+func (u *UtxorpcProvider) GetScriptCborByScriptHash(
+	ctx context.Context,
+	scriptHash string,
+) (string, error) {
+	return "", connector.ErrNotImplemented
 }
 
 func convertGRPCError(err error) error {

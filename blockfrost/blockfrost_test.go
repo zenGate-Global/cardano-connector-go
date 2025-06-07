@@ -5,43 +5,15 @@ import (
 	"encoding/hex"
 	"os"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
+	"github.com/Salvionied/apollo/constants"
 	"github.com/Salvionied/cbor/v2"
 	"github.com/tj/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	tests "github.com/zenGate-Global/cardano-connector-go/tests"
 )
-
-// compareRedeemers compares two slices of EvalRedeemer in an order-independent way
-func compareRedeemers(a, b []connector.EvalRedeemer) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	// Create copies to avoid modifying the original slices
-	aCopy := make([]connector.EvalRedeemer, len(a))
-	bCopy := make([]connector.EvalRedeemer, len(b))
-	copy(aCopy, a)
-	copy(bCopy, b)
-
-	// Sort by Tag first, then by Index
-	sortRedeemers := func(redeemers []connector.EvalRedeemer) {
-		sort.Slice(redeemers, func(i, j int) bool {
-			if redeemers[i].Tag != redeemers[j].Tag {
-				return redeemers[i].Tag < redeemers[j].Tag
-			}
-			return redeemers[i].Index < redeemers[j].Index
-		})
-	}
-
-	sortRedeemers(aCopy)
-	sortRedeemers(bCopy)
-
-	return reflect.DeepEqual(aCopy, bCopy)
-}
 
 // setupBlockfrost creates a Blockfrost provider for testing
 func setupBlockfrost(t *testing.T) *BlockfrostProvider {
@@ -55,6 +27,7 @@ func setupBlockfrost(t *testing.T) *BlockfrostProvider {
 	config := Config{
 		ProjectID:   projectID,
 		NetworkName: "preprod",
+		NetworkId:   int(constants.PREPROD),
 	}
 
 	provider, err := New(config)
@@ -84,6 +57,73 @@ func TestGetProtocolParameters(t *testing.T) {
 	if pp.MaxTxSize == 0 {
 		t.Error("Expected non-zero MaxTxSize")
 	}
+}
+
+func TestGetGenesisParams(t *testing.T) {
+	bf := setupBlockfrost(t)
+	ctx := context.Background()
+
+	gp, err := bf.GetGenesisParams(ctx)
+	if err != nil {
+		t.Fatalf("GetGenesisParams failed: %v", err)
+	}
+
+	assert.Equal(
+		t,
+		float32(0.05),
+		gp.ActiveSlotsCoefficient,
+		"ActiveSlotsCoefficient should be 0.05",
+	)
+	assert.Equal(t, 5, gp.UpdateQuorum, "UpdateQuorum should be 5")
+	assert.Equal(
+		t,
+		"45000000000000000",
+		gp.MaxLovelaceSupply,
+		"MaxLovelaceSupply should be 45000000000000000",
+	)
+	assert.Equal(t, 1, gp.NetworkMagic, "NetworkMagic should be 1")
+	assert.Equal(t, 432000, gp.EpochLength, "EpochLength should be 432000")
+	assert.Equal(
+		t,
+		1654041600,
+		gp.SystemStart,
+		"SystemStart should be 1654041600",
+	)
+	assert.Equal(
+		t,
+		129600,
+		gp.SlotsPerKesPeriod,
+		"SlotsPerKesPeriod should be 129600",
+	)
+	assert.Equal(t, 1, gp.SlotLength, "SlotLength should be 1")
+	assert.Equal(t, 62, gp.MaxKesEvolutions, "MaxKesEvolutions should be 62")
+	assert.Equal(t, 2160, gp.SecurityParam, "SecurityParam should be 2160")
+}
+
+func TestNetwork(t *testing.T) {
+	bf := setupBlockfrost(t)
+	assert.Equal(
+		t,
+		int(constants.PREPROD),
+		bf.Network(),
+		"Network should be preprod",
+	)
+}
+
+func TestEpoch(t *testing.T) {
+	bf := setupBlockfrost(t)
+	ctx := context.Background()
+	epoch, err := bf.Epoch(ctx)
+	if err != nil {
+		t.Fatalf("Epoch failed: %v", err)
+	}
+
+	assert.Equal(
+		t,
+		epoch >= 0,
+		true,
+		"Epoch should be greater than or equal to 0",
+	)
 }
 
 func TestGetTip(t *testing.T) {
@@ -288,7 +328,7 @@ func TestEvaluateTxSample1(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !compareRedeemers(redeemers, tests.ApolloEvalSample1RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample1RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
 			tests.ApolloEvalSample1RedeemersExUnits,
@@ -310,7 +350,7 @@ func TestEvaluateTxSample2(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !compareRedeemers(redeemers, tests.ApolloEvalSample2RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample2RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
 			tests.ApolloEvalSample2RedeemersExUnits,
@@ -336,11 +376,26 @@ func TestEvaluateTxSample3(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !compareRedeemers(redeemers, tests.ApolloEvalSample3RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
 			tests.ApolloEvalSample3RedeemersExUnits,
 			redeemers,
 		)
 	}
+}
+
+func TestGetScriptCborByScriptHash(t *testing.T) {
+	bf := setupBlockfrost(t)
+	ctx := context.Background()
+
+	scriptCbor, err := bf.GetScriptCborByScriptHash(
+		ctx,
+		tests.ScriptHashToQuery,
+	)
+	if err != nil {
+		t.Fatalf("GetScriptCborByScriptHash failed: %v", err)
+	}
+
+	assert.Equal(t, scriptCbor, tests.ExpectedScriptCbor)
 }

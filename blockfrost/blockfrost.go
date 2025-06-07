@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Salvionied/apollo/serialization/PlutusData"
+	"github.com/Salvionied/apollo/serialization/Redeemer"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
@@ -61,9 +62,26 @@ func New(config Config) (*BlockfrostProvider, error) {
 		baseURL:                   baseURL,
 		projectID:                 config.ProjectID,
 		networkName:               config.NetworkName,
+		networkId:                 config.NetworkId,
 		customSubmissionEndpoints: config.CustomSubmissionEndpoints,
 	}
 	return provider, nil
+}
+
+func (b *BlockfrostProvider) Network() int {
+	return b.networkId
+}
+
+func (b *BlockfrostProvider) Epoch(ctx context.Context) (int, error) {
+	var bfEpoch BlockfrostEpoch
+	path := "/epochs/latest"
+
+	err := b.doRequest(ctx, "GET", path, nil, &bfEpoch)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get current epoch: %w", err)
+	}
+
+	return bfEpoch.Epoch, nil
 }
 
 // GetProtocolParameters fetches the current protocol parameters from Blockfrost.
@@ -82,6 +100,34 @@ func (b *BlockfrostProvider) GetProtocolParameters(
 	}
 
 	return bfParams.ToBaseParams(), nil
+}
+
+func (b *BlockfrostProvider) GetGenesisParams(
+	ctx context.Context,
+) (Base.GenesisParameters, error) {
+	var bfGenesisParams BlockfrostGenesisParameters
+	path := "/genesis"
+
+	err := b.doRequest(ctx, "GET", path, nil, &bfGenesisParams)
+	if err != nil {
+		return Base.GenesisParameters{}, fmt.Errorf(
+			"failed to get protocol parameters: %w",
+			err,
+		)
+	}
+
+	return Base.GenesisParameters{
+		ActiveSlotsCoefficient: bfGenesisParams.ActiveSlotsCoefficient,
+		UpdateQuorum:           bfGenesisParams.UpdateQuorum,
+		MaxLovelaceSupply:      bfGenesisParams.MaxLovelaceSupply,
+		NetworkMagic:           bfGenesisParams.NetworkMagic,
+		EpochLength:            bfGenesisParams.EpochLength,
+		SystemStart:            bfGenesisParams.SystemStart,
+		SlotsPerKesPeriod:      bfGenesisParams.SlotsPerKesPeriod,
+		SlotLength:             bfGenesisParams.SlotLength,
+		MaxKesEvolutions:       bfGenesisParams.MaxKesEvolutions,
+		SecurityParam:          bfGenesisParams.SecurityParam,
+	}, nil
 }
 
 func (b *BlockfrostProvider) GetTip(
@@ -640,7 +686,7 @@ func (b *BlockfrostProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
 	additionalUTxOs []UTxO.UTxO,
-) ([]connector.EvalRedeemer, error) {
+) (map[string]Redeemer.ExecutionUnits, error) {
 	additionalBfUtxos := make([]bfAdditionalUtxoItem, 0, len(additionalUTxOs))
 	for _, utxo := range additionalUTxOs {
 

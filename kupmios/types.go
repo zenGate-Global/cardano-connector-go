@@ -8,11 +8,13 @@ import (
 type KupmiosProvider struct {
 	ogmigoClient *ogmigo.Client
 	kugoClient   *kugo.Client
+	networkId    int
 }
 
 type Config struct {
 	OgmigoEndpoint string
 	KugoEndpoint   string
+	NetworkId      int
 }
 
 type OgmiosScript struct {
@@ -117,4 +119,19 @@ type OgmiosProtocolParameters struct {
 	GovernanceActionLifetime               uint64                                 `json:"governanceActionLifetime"`
 	StakePoolRetirementEpochBound          uint64                                 `json:"stakePoolRetirementEpochBound"`
 	StakePoolVotingThresholds              StakePoolVotingThresholds              `json:"stakePoolVotingThresholds"`
+}
+
+type ShelleyGenesisParams struct {
+	StartTime              string `json:"startTime"`
+	NetworkMagic           int    `json:"networkMagic"`
+	ActiveSlotsCoefficient string `json:"activeSlotsCoefficient"` // fraction like "1/20"
+	SecurityParameter      int    `json:"securityParameter"`
+	EpochLength            int    `json:"epochLength"`
+	SlotsPerKesPeriod      int    `json:"slotsPerKesPeriod"`
+	MaxKesEvolutions       int    `json:"maxKesEvolutions"`
+	SlotLength             struct {
+		Milliseconds int `json:"milliseconds"`
+	} `json:"slotLength"`
+	UpdateQuorum      int   `json:"updateQuorum"`
+	MaxLovelaceSupply int64 `json:"maxLovelaceSupply"`
 }

@@ -38,6 +38,15 @@ type Provider interface {
 	// GetProtocolParameters fetches the current protocol parameters.
 	GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error)
 
+	// GetGenesisParams fetches the genesis parameters.
+	GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error)
+
+	// Network returns the network id.
+	Network() int
+
+	// Epoch returns the current epoch.
+	Epoch(ctx context.Context) (int, error)
+
 	// GetTip fetches the current tip of the blockchain.
 	GetTip(ctx context.Context) (Tip, error)
 
@@ -88,5 +97,11 @@ type Provider interface {
 		ctx context.Context,
 		tx []byte,
 		additionalUTxOs []UTxO.UTxO,
-	) ([]EvalRedeemer, error)
+	) (map[string]Redeemer.ExecutionUnits, error)
+
+	// GetScriptCborByScriptHash fetches the CBOR representation of a script by its hash.
+	GetScriptCborByScriptHash(
+		ctx context.Context,
+		scriptHash string,
+	) (string, error)
 }
