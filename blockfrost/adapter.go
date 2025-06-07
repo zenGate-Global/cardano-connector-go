@@ -338,43 +338,36 @@ func adaptBlockfrostAccountToDelegation(
 // adaptBlockfrostEvalResult converts Blockfrost evaluation result to connector eval redeemers
 func adaptBlockfrostEvalResult(
 	bfEvalResp bfEvalResult,
-) []connector.EvalRedeemer {
-	results := make([]connector.EvalRedeemer, 0, len(bfEvalResp.Result))
+) map[string]Redeemer.ExecutionUnits {
+	results := make(map[string]Redeemer.ExecutionUnits)
 	for key, units := range bfEvalResp.Result {
 		parts := strings.Split(key, ":")
 		if len(parts) != 2 {
 			continue
 		}
 		tagStr, indexStr := parts[0], parts[1]
-		index, err := strconv.ParseUint(indexStr, 10, 32)
+		_, err := strconv.ParseUint(indexStr, 10, 32)
 		if err != nil {
 			continue
 		}
-		var tag Redeemer.RedeemerTag
-		switch strings.ToLower(tagStr) {
-		case "spend":
-			tag = Redeemer.SPEND
-		case "mint":
-			tag = Redeemer.MINT
+
+		// Convert tag to standard format
+		purpose := strings.ToLower(tagStr)
+		switch purpose {
 		case "cert":
-			tag = Redeemer.CERT
-		case "reward":
-			tag = Redeemer.REWARD
-		case "withdraw":
-			tag = Redeemer.REWARD
+			purpose = "certificate"
+		case "reward", "withdraw":
+			purpose = "withdrawal"
+		case "spend", "mint":
+			// These are already in the correct format
 		default:
 			continue
 		}
-		mem := units.Memory
-		steps := units.Steps
-		results = append(results, connector.EvalRedeemer{
-			Tag:   tag,
-			Index: uint32(index),
-			ExUnits: Redeemer.ExecutionUnits{
-				Mem:   int64(mem),
-				Steps: int64(steps),
-			},
-		})
+
+		results[fmt.Sprintf("%s:%s", purpose, indexStr)] = Redeemer.ExecutionUnits{
+			Mem:   int64(units.Memory),
+			Steps: int64(units.Steps),
+		}
 	}
 	return results
 }
