@@ -5,8 +5,8 @@ go 1.24.0
 require (
 	github.com/Salvionied/apollo v1.1.1
 	github.com/Salvionied/cbor/v2 v2.6.0
-	github.com/SundaeSwap-finance/kugo v1.2.0
-	github.com/SundaeSwap-finance/ogmigo/v6 v6.0.1
+	github.com/SundaeSwap-finance/kugo v1.2.1-0.20250610232656-0a1f4fbc88d1
+	github.com/SundaeSwap-finance/ogmigo/v6 v6.0.3-0.20250605095919-a68b42df202a
 	github.com/stretchr/testify v1.8.1
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.16.0
@@ -33,8 +33,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/SundaeSwap-finance/ogmigo/v6 => github.com/mgpai22/ogmigo/v6 v6.0.4
+// replace github.com/SundaeSwap-finance/ogmigo/v6 => github.com/mgpai22/ogmigo/v6 v6.0.4
 
-replace github.com/SundaeSwap-finance/kugo => github.com/mgpai22/kugo v1.2.1
+// replace github.com/SundaeSwap-finance/kugo => github.com/mgpai22/kugo v1.2.1
 
 // replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
