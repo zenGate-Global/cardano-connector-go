@@ -6,8 +6,6 @@ github.com/Salvionied/cbor/v2 v2.6.0 h1:OEwlZLiodLdNeM9wFoSydLvj6/rHRaxu5G8VzwXS
 github.com/Salvionied/cbor/v2 v2.6.0/go.mod h1:oFxaUo/mQ5sG1k459nzctGdYa80jy0ZqZ9pln9C/fGw=
 github.com/SundaeSwap-finance/kugo v1.2.1-0.20250610232656-0a1f4fbc88d1 h1:+0jJaFvpDEsg22SE+BZiEZ1YtGLzJpA00XO1NB7lMSw=
 github.com/SundaeSwap-finance/kugo v1.2.1-0.20250610232656-0a1f4fbc88d1/go.mod h1:gK48h7ZD6cLgsOCWs6HHNFjtoWlxQzNyRSAJlS7bFEA=
-github.com/SundaeSwap-finance/ogmigo/v6 v6.0.2 h1:7ou2Dpi4gHHn7+C3ZihRa5zQDzDHLBVVUb8zTS/rkTk=
-github.com/SundaeSwap-finance/ogmigo/v6 v6.0.2/go.mod h1:FgU9nAQNyi+ApWqXB+DKAcbPISl/2gFZGJklqWmT9qY=
 github.com/SundaeSwap-finance/ogmigo/v6 v6.0.3-0.20250605095919-a68b42df202a h1:iganqOvfGHqmnOB19jRr1hWz5PNODbaoaO3QXNbuyQA=
 github.com/SundaeSwap-finance/ogmigo/v6 v6.0.3-0.20250605095919-a68b42df202a/go.mod h1:FgU9nAQNyi+ApWqXB+DKAcbPISl/2gFZGJklqWmT9qY=
 github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBAUSII=
@@ -57,13 +55,9 @@ github.com/onsi/gomega v1.4.3/go.mod h1:ex+gbHU/CVuBBDIJjb2X0qEXbFg53c61hWP/1Cpa
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
-github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
-github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
-github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
-github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
+github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
+github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/tj/assert v0.0.3 h1:Df/BlaZ20mq6kuai7f5z2TvPFiwC3xaWJSDQNiIS3Rk=
 github.com/tj/assert v0.0.3/go.mod h1:Ne6X72Q+TB1AteidzQncjw9PabbMp4PBMZ1k+vd1Pvk=
 github.com/utxorpc/go-codegen v0.16.0 h1:jPTyKtv2OI6Ms7U/goAYbaP6axAZ39vRmoWdjO/rkeM=
