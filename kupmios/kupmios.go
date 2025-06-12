@@ -603,7 +603,7 @@ func (kp *KupmiosProvider) SubmitTx(
 		ctx,
 		hex.EncodeToString(txBytes),
 	)
-	if err != nil || submittedTxID.Error.Code != 0 {
+	if err != nil || submittedTxID.Error != nil {
 		return "", fmt.Errorf(
 			"kupmios: Ogmigo tx submission failed: %s",
 			submittedTxID.Error.Message,
