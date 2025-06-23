@@ -22,11 +22,11 @@ func setupKupmios(t *testing.T) *KupmiosProvider {
 	t.Helper()
 
 	ogmigoEndpoint := os.Getenv("OGMIOS_ENDPOINT")
-	kugoEndpoint := os.Getenv("KUGO_ENDPOINT")
+	kupoEndpoint := os.Getenv("KUPO_ENDPOINT")
 
 	config := Config{
 		OgmigoEndpoint: ogmigoEndpoint,
-		KugoEndpoint:   kugoEndpoint,
+		KupoEndpoint:   kupoEndpoint,
 		NetworkId:      int(constants.PREPROD),
 	}
 

@@ -29,7 +29,7 @@ func New(config Config) (*KupmiosProvider, error) {
 		ogmigo.WithEndpoint(config.OgmigoEndpoint),
 	)
 	kugoClient := kugo.New(
-		kugo.WithEndpoint(config.KugoEndpoint),
+		kugo.WithEndpoint(config.KupoEndpoint),
 	)
 
 	return &KupmiosProvider{

@@ -23,7 +23,7 @@ jobs:
       BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_KEY }}
       DMTR_API_KEY: ${{ secrets.DMTR_API_KEY }}
       OGMIOS_ENDPOINT: ${{ secrets.OGMIOS_ENDPOINT }}
-      KUGO_ENDPOINT: ${{ secrets.KUGO_ENDPOINT }}
+      KUPO_ENDPOINT: ${{ secrets.KUPO_ENDPOINT }}
       UTXORPC_URL: ${{ secrets.UTXORPC_URL }}
     steps:
       - uses: actions/checkout@v4

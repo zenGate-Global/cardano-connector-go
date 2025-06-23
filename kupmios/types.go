@@ -13,7 +13,7 @@ type KupmiosProvider struct {
 
 type Config struct {
 	OgmigoEndpoint string
-	KugoEndpoint   string
+	KupoEndpoint   string
 	NetworkId      int
 }
 
