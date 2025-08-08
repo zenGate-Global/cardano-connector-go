@@ -10,7 +10,7 @@ require (
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tj/assert v0.0.3
-	github.com/utxorpc/go-codegen v0.16.0
+	github.com/utxorpc/go-codegen v0.17.0
 	github.com/utxorpc/go-sdk v0.0.0-20250606094115-4f30dada2a5f
 )
 
