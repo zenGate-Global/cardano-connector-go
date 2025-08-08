@@ -7,6 +7,7 @@ require (
 	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.0
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.0.3-0.20250605095919-a68b42df202a
+	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.16.0
@@ -38,3 +39,5 @@ require (
 // replace github.com/SundaeSwap-finance/kugo => github.com/mgpai22/kugo v1.2.1
 
 // replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
+
+replace github.com/maestro-org/go-sdk => github.com/mgpai22/maestro-cardano-go-sdk v0.0.0-20250808070843-b2b1302fb8b4
