@@ -3,6 +3,7 @@ package maestro
 import (
 	"context"
 	"encoding/hex"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ import (
 func setupMaestro(t *testing.T) *MaestroProvider {
 	t.Helper()
 
-	projectID := "NGWVQs06kfkHmioj49Qpv3DBw4uJWyX6"
+	projectID := os.Getenv("MAESTRO_API_KEY")
 	if projectID == "" {
 		t.Log("MAESTRO_API_KEY environment variable not set")
 	}
