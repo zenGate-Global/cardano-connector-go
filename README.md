@@ -37,10 +37,10 @@ The library defines a `Provider` interface that standardizes access to essential
 - [x] **Blockfrost**
 - [x] **Kupmios**
 - [x] **UTxORPC**
+- [x] **Maestro**
 
 ### Providers to Implement
 
-- [ ] **Maestro**
 - [ ] **Koios**
 
 ## TODO
@@ -48,3 +48,4 @@ The library defines a `Provider` interface that standardizes access to essential
 - kupmios eval not completly working, see test2, test3 for eval
 - utxorpc eval not working, unable to find fully functional api providers atm
 - plutus script bytes -> plutus script type matching needs to be implemented, its harded coded to v2 atm
+- make sure maestro protocol params are all filled as much as possible
