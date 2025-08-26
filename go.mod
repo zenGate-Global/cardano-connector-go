@@ -8,7 +8,7 @@ require (
 	github.com/SundaeSwap-finance/kugo v1.3.0
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.0.3-0.20250605095919-a68b42df202a
 	github.com/maestro-org/go-sdk v1.2.1
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.17.0
 	github.com/utxorpc/go-sdk v0.0.0-20250801142914-6651d7784e43
