@@ -51,7 +51,7 @@ func New(config Config) (*UtxorpcProvider, error) {
 func (u *UtxorpcProvider) GetProtocolParameters(
 	ctx context.Context,
 ) (Base.ProtocolParameters, error) {
-	paramsResponse, err := u.client.ReadParamsWithContext(ctx)
+	paramsResponse, err := u.client.GetProtocolParametersWithContext(ctx)
 	if err != nil {
 		return Base.ProtocolParameters{}, fmt.Errorf(
 			"utxorpc: ReadParams failed: %w",
@@ -174,7 +174,7 @@ func (u *UtxorpcProvider) Epoch(ctx context.Context) (int, error) {
 }
 
 func (u *UtxorpcProvider) GetTip(ctx context.Context) (connector.Tip, error) {
-	tipResp, err := u.client.ReadTipWithContext(ctx)
+	tipResp, err := u.client.GetTipWithContext(ctx)
 	if err != nil {
 		return connector.Tip{}, fmt.Errorf(
 			"utxorpc: failed to get tip: %w",
@@ -207,7 +207,7 @@ func (u *UtxorpcProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 	block := blockResp.Msg.GetBlock()[0]
 
 	return connector.Tip{
-		Slot:   blockRef.GetIndex(),
+		Slot:   blockRef.GetSlot(),
 		Height: block.GetCardano().GetHeader().GetHeight(),
 		Hash:   hex.EncodeToString(blockRef.GetHash()),
 	}, nil
@@ -457,7 +457,7 @@ func (u *UtxorpcProvider) AwaitTx(
 	txHash string,
 	checkInterval time.Duration,
 ) (bool, error) {
-	stream, err := u.client.WaitForTx(txHash)
+	stream, err := u.client.WaitForTransaction(txHash)
 	if err != nil {
 		return false, fmt.Errorf(
 			"utxorpc: WaitForTx failed: %w",
@@ -492,7 +492,7 @@ func (u *UtxorpcProvider) SubmitTx(
 	req := &submit.SubmitTxRequest{
 		Tx: []*submit.AnyChainTx{txn},
 	}
-	resp, err := u.client.SubmitTxWithContext(ctx, req)
+	resp, err := u.client.SubmitTransactionWithContext(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("utxorpc: SubmitTx failed: %w", err)
 	}
@@ -521,7 +521,7 @@ func (u *UtxorpcProvider) EvaluateTx(
 		Tx: []*submit.AnyChainTx{txn},
 	}
 
-	res, err := u.client.EvalTxWithContext(ctx, req)
+	res, err := u.client.EvaluateTransactionWithContext(ctx, req)
 	if err != nil {
 		return map[string]Redeemer.ExecutionUnits{}, err
 	}

@@ -26,10 +26,10 @@ jobs:
       KUPO_ENDPOINT: ${{ secrets.KUPO_ENDPOINT }}
       UTXORPC_URL: ${{ secrets.UTXORPC_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
       - name: go-test

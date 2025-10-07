@@ -32,6 +32,10 @@ test-utxorpc:
 	@echo "Running utxorpc tests..."
 	@set -a && [ -f .env ] && . ./.env; set +a && go test -v -race ./utxorpc
 
+test-maestro:
+	@echo "Running maestro tests..."
+	@set -a && [ -f .env ] && . ./.env; set +a && go test -v -race ./maestro
+
 test-match:
 	@echo "Running test: $(TEST)..."
 	@go test -run $(TEST) -v ./...
