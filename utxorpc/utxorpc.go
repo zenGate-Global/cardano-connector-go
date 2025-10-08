@@ -17,12 +17,13 @@ import (
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/query"
 	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/submit"
-	utxorpc_sdk "github.com/utxorpc/go-sdk"
+	sdk "github.com/utxorpc/go-sdk"
+	utxorpc "github.com/utxorpc/go-sdk/cardano"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
 type UtxorpcProvider struct {
-	client    *utxorpc_sdk.UtxorpcClient
+	client    *utxorpc.Client
 	networkId int
 }
 
@@ -35,9 +36,9 @@ type Config struct {
 var _ connector.Provider = (*UtxorpcProvider)(nil)
 
 func New(config Config) (*UtxorpcProvider, error) {
-	client := utxorpc_sdk.NewClient(utxorpc_sdk.WithBaseUrl(config.BaseUrl))
+	client := utxorpc.NewClient(sdk.WithBaseUrl(config.BaseUrl))
 	if config.ApiKey != "" {
-		client.SetHeader("dmtr-api-key", config.ApiKey)
+		client.UtxorpcClient.SetHeader("dmtr-api-key", config.ApiKey)
 	}
 
 	provider := &UtxorpcProvider{
