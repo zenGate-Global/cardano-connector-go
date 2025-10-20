@@ -6,7 +6,7 @@ require (
 	github.com/Salvionied/apollo v1.1.1
 	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.0
-	github.com/SundaeSwap-finance/ogmigo/v6 v6.1.0
+	github.com/SundaeSwap-finance/ogmigo/v6 v6.2.0
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
@@ -23,6 +23,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
