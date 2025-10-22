@@ -25,6 +25,8 @@ jobs:
       OGMIOS_ENDPOINT: ${{ secrets.OGMIOS_ENDPOINT }}
       KUPO_ENDPOINT: ${{ secrets.KUPO_ENDPOINT }}
       UTXORPC_URL: ${{ secrets.UTXORPC_URL }}
+      MAESTRO_API_KEY: ${{ secrets.MAESTRO_API_KEY }}
+
     steps:
       - uses: actions/checkout@v5
         with:
