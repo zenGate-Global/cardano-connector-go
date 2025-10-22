@@ -747,7 +747,7 @@ func (b *BlockfrostProvider) EvaluateTx(
 				scriptHex := hex.EncodeToString(scriptCbor)
 				// TODO dyanmically choose v1, v2, or v3
 				txOut.ScriptRef = &bfScriptRef{
-					PlutusV2: &scriptHex,
+					PlutusV3: &scriptHex,
 				}
 			}
 		}
