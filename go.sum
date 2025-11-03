@@ -1,5 +1,5 @@
-connectrpc.com/connect v1.19.0 h1:LuqUbq01PqbtL0o7vn0WMRXzR2nNsiINe5zfcJ24pJM=
-connectrpc.com/connect v1.19.0/go.mod h1:tN20fjdGlewnSFeZxLKb0xwIZ6ozc3OQs2hTXy4du9w=
+connectrpc.com/connect v1.19.1 h1:R5M57z05+90EfEvCY1b7hBxDVOUl45PrtXtAV2fOC14=
+connectrpc.com/connect v1.19.1/go.mod h1:tN20fjdGlewnSFeZxLKb0xwIZ6ozc3OQs2hTXy4du9w=
 github.com/Salvionied/apollo v1.1.1 h1:8Iw4m9bwLbDjebQbbkqNlfvyrjS0Oy3bRZuo2ra0Ifg=
 github.com/Salvionied/apollo v1.1.1/go.mod h1:v1jv3hFtZziqAk87yCJf7RxTa6F+HqfhKkHxcxHLYxw=
 github.com/Salvionied/cbor/v2 v2.6.0 h1:OEwlZLiodLdNeM9wFoSydLvj6/rHRaxu5G8VzwXSeuY=
@@ -62,8 +62,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tj/assert v0.0.3 h1:Df/BlaZ20mq6kuai7f5z2TvPFiwC3xaWJSDQNiIS3Rk=
 github.com/tj/assert v0.0.3/go.mod h1:Ne6X72Q+TB1AteidzQncjw9PabbMp4PBMZ1k+vd1Pvk=
-github.com/utxorpc/go-codegen v0.17.0 h1:cJ7Df9r8Az39lveIcmzcRciIDc3UJFdMSmXg8IAtBPM=
-github.com/utxorpc/go-codegen v0.17.0/go.mod h1:LBVGFns4YAHMhy+Pc8tF5ExkU+N8Wm3srst4omKZy4g=
+github.com/utxorpc/go-codegen v0.18.1 h1:2eenzXCkqvB2+g8MCq70MBR6koWs9CeTihZ0AqUvLDY=
+github.com/utxorpc/go-codegen v0.18.1/go.mod h1:DFij3zIGDM39BYCuzrz1rSuO3kTIIiHglWV0043wQxo=
 github.com/utxorpc/go-sdk v0.0.0-20251007134241-dbe24b0be860 h1:GdSPVMsEOVYh8kj5EjcfNv5DqFnVP6TB5Loj+CophhQ=
 github.com/utxorpc/go-sdk v0.0.0-20251007134241-dbe24b0be860/go.mod h1:iQwU6/9MRU+8YTY/vD2QKoX6Ic2myab/1Ra79X/IUeo=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
