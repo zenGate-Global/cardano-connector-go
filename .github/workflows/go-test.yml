@@ -28,7 +28,7 @@ jobs:
       MAESTRO_API_KEY: ${{ secrets.MAESTRO_API_KEY }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - uses: actions/setup-go@v6
