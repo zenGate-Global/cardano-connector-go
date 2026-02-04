@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/cardano"
 	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/query"
 	"github.com/utxorpc/go-codegen/utxorpc/v1alpha/submit"
 	sdk "github.com/utxorpc/go-sdk"
@@ -69,17 +71,17 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 	cardanoParams := paramsResponse.Msg.GetValues().GetCardano()
 
 	pp := Base.ProtocolParameters{
-		MinFeeConstant:     int(cardanoParams.GetMinFeeConstant()),
-		MinFeeCoefficient:  int(cardanoParams.GetMinFeeCoefficient()),
+		MinFeeConstant:     int(bigIntToInt64(cardanoParams.GetMinFeeConstant())),
+		MinFeeCoefficient:  int(bigIntToInt64(cardanoParams.GetMinFeeCoefficient())),
 		MaxTxSize:          int(cardanoParams.GetMaxTxSize()),
 		MaxBlockSize:       int(cardanoParams.GetMaxBlockBodySize()),
 		MaxBlockHeaderSize: int(cardanoParams.GetMaxBlockHeaderSize()),
 		KeyDeposits: strconv.FormatUint(
-			cardanoParams.GetStakeKeyDeposit(),
+			bigIntToUint64(cardanoParams.GetStakeKeyDeposit()),
 			10,
 		),
 		PoolDeposits: strconv.FormatUint(
-			cardanoParams.GetPoolDeposit(),
+			bigIntToUint64(cardanoParams.GetPoolDeposit()),
 			10,
 		),
 		PooolInfluence: float32(
@@ -109,7 +111,7 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 			cardanoParams.GetProtocolVersion().GetMinor(),
 		),
 		// MinUtxo:               fmt.Sprintf("%d", cardanoParams),
-		MinPoolCost: strconv.FormatUint(cardanoParams.GetMinPoolCost(), 10),
+		MinPoolCost: strconv.FormatUint(bigIntToUint64(cardanoParams.GetMinPoolCost()), 10),
 		PriceMem: float32(
 			uint32(
 				cardanoParams.GetPrices().GetMemory().GetNumerator(),
@@ -147,7 +149,7 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 		CollateralPercent:  int(cardanoParams.GetCollateralPercentage()),
 		MaxCollateralInuts: int(cardanoParams.GetMaxCollateralInputs()),
 		CoinsPerUtxoByte: strconv.FormatUint(
-			cardanoParams.GetCoinsPerUtxoByte(),
+			bigIntToUint64(cardanoParams.GetCoinsPerUtxoByte()),
 			10,
 		),
 		CoinsPerUtxoWord: "0",
@@ -490,9 +492,7 @@ func (u *UtxorpcProvider) SubmitTx(
 		},
 	}
 
-	req := &submit.SubmitTxRequest{
-		Tx: []*submit.AnyChainTx{txn},
-	}
+	req := &submit.SubmitTxRequest{Tx: txn}
 	resp, err := u.client.SubmitTransactionWithContext(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("utxorpc: SubmitTx failed: %w", err)
@@ -518,9 +518,7 @@ func (u *UtxorpcProvider) EvaluateTx(
 		},
 	}
 
-	req := &submit.EvalTxRequest{
-		Tx: []*submit.AnyChainTx{txn},
-	}
+	req := &submit.EvalTxRequest{Tx: txn}
 
 	res, err := u.client.EvaluateTransactionWithContext(ctx, req)
 	if err != nil {
@@ -528,8 +526,11 @@ func (u *UtxorpcProvider) EvaluateTx(
 	}
 
 	resp := make(map[string]Redeemer.ExecutionUnits)
-	// Use single report since we know we have 1 Tx to eval
-	redeemers := res.Msg.GetReport()[0].GetCardano().GetRedeemers()
+	report := res.Msg.GetReport()
+	if report == nil || report.GetCardano() == nil {
+		return resp, errors.New("utxorpc: empty eval report")
+	}
+	redeemers := report.GetCardano().GetRedeemers()
 	for _, r := range redeemers {
 		purpose := r.GetPurpose().String()
 		switch purpose {
@@ -562,6 +563,42 @@ func (u *UtxorpcProvider) GetScriptCborByScriptHash(
 	scriptHash string,
 ) (string, error) {
 	return "", connector.ErrNotImplemented
+}
+
+func bigIntToUint64(b *cardano.BigInt) uint64 {
+	if b == nil {
+		return 0
+	}
+	switch v := b.GetBigInt().(type) {
+	case *cardano.BigInt_Int:
+		if v.Int < 0 {
+			return 0
+		}
+		return uint64(v.Int)
+	case *cardano.BigInt_BigUInt:
+		return new(big.Int).SetBytes(v.BigUInt).Uint64()
+	case *cardano.BigInt_BigNInt:
+		// negative big ints are not expected for these params; treat as zero
+		return 0
+	default:
+		return 0
+	}
+}
+
+func bigIntToInt64(b *cardano.BigInt) int64 {
+	if b == nil {
+		return 0
+	}
+	switch v := b.GetBigInt().(type) {
+	case *cardano.BigInt_Int:
+		return v.Int
+	case *cardano.BigInt_BigUInt:
+		return new(big.Int).SetBytes(v.BigUInt).Int64()
+	case *cardano.BigInt_BigNInt:
+		return -new(big.Int).SetBytes(v.BigNInt).Int64()
+	default:
+		return 0
+	}
 }
 
 func convertGRPCError(err error) error {
