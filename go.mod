@@ -10,12 +10,12 @@ require (
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
-	github.com/utxorpc/go-codegen v0.17.0
-	github.com/utxorpc/go-sdk v0.0.0-20251007134241-dbe24b0be860
+	github.com/utxorpc/go-codegen v0.18.1
+	github.com/utxorpc/go-sdk v0.0.1
 )
 
 require (
-	connectrpc.com/connect v1.19.0 // indirect
+	connectrpc.com/connect v1.19.1 // indirect
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
 	github.com/btcsuite/btcutil v1.0.2 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
@@ -25,11 +25,11 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
-	golang.org/x/net v0.44.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
