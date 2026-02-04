@@ -376,7 +376,7 @@ func adaptBlockfrostEvalResult(
 func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
 	costModels := make(map[string][]int64)
 	for key, nestedMap := range p.CostModels {
-		var values []int64
+		values := make([]int64, 0, len(nestedMap))
 		for _, value := range nestedMap {
 			values = append(values, value)
 		}
