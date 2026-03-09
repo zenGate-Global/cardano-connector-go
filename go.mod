@@ -40,4 +40,4 @@ require (
 
 // replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
 
-replace github.com/maestro-org/go-sdk => github.com/mgpai22/maestro-cardano-go-sdk v0.0.0-20250808070843-b2b1302fb8b4
+replace github.com/maestro-org/go-sdk => github.com/mgpai22/maestro-cardano-go-sdk v0.0.0-20260309092003-ccf2793f8d4d
