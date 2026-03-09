@@ -11,8 +11,6 @@ import (
 
 	"github.com/Salvionied/apollo/serialization/PlutusData"
 	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/TransactionInput"
-	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
@@ -50,6 +48,22 @@ func New(config Config) (*MaestroProvider, error) {
 	}
 
 	return provider, nil
+}
+
+// cacheRawCbor stores the original txout_cbor hex from Maestro for later re-use.
+func (m *MaestroProvider) cacheRawCbor(txHash string, index int, rawCborHex string) {
+	if rawCborHex != "" {
+		m.rawCborCache.Store(utxoCacheKey(txHash, index), rawCborHex)
+	}
+}
+
+// lookupRawCbor retrieves a previously cached txout_cbor hex string.
+func (m *MaestroProvider) lookupRawCbor(key string) (string, bool) {
+	v, ok := m.rawCborCache.Load(key)
+	if !ok {
+		return "", false
+	}
+	return v.(string), true
 }
 
 // Network returns the network ID of the provider.
@@ -123,10 +137,11 @@ func (m *MaestroProvider) GetUtxosByAddress(
 	}
 
 	for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-		utxo, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
+		utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
 		if err != nil {
 			return nil, err
 		}
+		m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
 		utxos = append(utxos, utxo)
 	}
 
@@ -140,19 +155,11 @@ func (m *MaestroProvider) GetUtxosByAddress(
 			return utxos, err
 		}
 		for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-			utxo := UTxO.UTxO{}
-			decodedHash, _ := hex.DecodeString(maestroUtxo.TxHash)
-			utxo.Input = TransactionInput.TransactionInput{
-				TransactionId: decodedHash,
-				Index:         int(maestroUtxo.Index),
-			}
-			output := TransactionOutput.TransactionOutput{}
-			decodedCbor, _ := hex.DecodeString(maestroUtxo.TxOutCbor)
-			err = cbor.Unmarshal(decodedCbor, &output)
+			utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
 			if err != nil {
 				return nil, err
 			}
-			utxo.Output = output
+			m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
 			utxos = append(utxos, utxo)
 		}
 	}
@@ -177,10 +184,11 @@ func (m *MaestroProvider) GetUtxosWithUnit(
 	}
 
 	for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-		utxo, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
+		utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
 		if err != nil {
 			return nil, err
 		}
+		m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
 		utxos = append(utxos, utxo)
 	}
 
@@ -196,19 +204,11 @@ func (m *MaestroProvider) GetUtxosWithUnit(
 			return utxos, err
 		}
 		for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-			utxo := UTxO.UTxO{}
-			decodedHash, _ := hex.DecodeString(maestroUtxo.TxHash)
-			utxo.Input = TransactionInput.TransactionInput{
-				TransactionId: decodedHash,
-				Index:         int(maestroUtxo.Index),
-			}
-			output := TransactionOutput.TransactionOutput{}
-			decodedCbor, _ := hex.DecodeString(maestroUtxo.TxOutCbor)
-			err = cbor.Unmarshal(decodedCbor, &output)
+			utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
 			if err != nil {
 				return nil, err
 			}
-			utxo.Output = output
+			m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
 			utxos = append(utxos, utxo)
 		}
 	}
@@ -316,7 +316,7 @@ func (m *MaestroProvider) GetUtxosByOutRef(
 				err,
 			)
 		}
-		apolloUtxo, err := adaptMaestroUtxoToApolloUtxo(resp.Data)
+		apolloUtxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(resp.Data)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"maestro: failed to adapt utxo %s#%d: %w",
@@ -325,6 +325,7 @@ func (m *MaestroProvider) GetUtxosByOutRef(
 				err,
 			)
 		}
+		m.cacheRawCbor(resp.Data.TxHash, int(resp.Data.Index), rawCbor)
 		results = append(results, apolloUtxo)
 	}
 	return results, nil
@@ -460,7 +461,7 @@ func (m *MaestroProvider) EvaluateTx(
 
 	var additionalUtxos []models.AdditionalUtxo
 	if len(additional) > 0 {
-		maestroExtras, err := adaptApolloUtxosToMaestro(additional)
+		maestroExtras, err := adaptApolloUtxosToMaestro(additional, m.lookupRawCbor)
 		if err != nil {
 			return nil, fmt.Errorf("failed to adapt additional UTxOs: %w", err)
 		}

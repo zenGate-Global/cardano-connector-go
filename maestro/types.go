@@ -1,6 +1,10 @@
 package maestro
 
-import "github.com/maestro-org/go-sdk/client"
+import (
+	"sync"
+
+	"github.com/maestro-org/go-sdk/client"
+)
 
 type Config struct {
 	// ProjectID is the API key for authenticating with the Maestro API.
@@ -18,4 +22,11 @@ type MaestroProvider struct {
 	client      *client.Client
 	networkId   int
 	networkName string
+
+	// rawCborCache preserves the original txout_cbor hex strings returned by
+	// Maestro so they can be passed back verbatim during EvaluateTx. Apollo's
+	// CBOR marshaling does not guarantee byte-identical output, and Maestro
+	// rejects re-encoded UTxOs as "Malformed additional UTxO".
+	// Key format: "txhash#index"
+	rawCborCache sync.Map
 }

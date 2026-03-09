@@ -101,8 +101,15 @@ func adaptMaestroProtocolParams(
 	return protocolParams
 }
 
-// adaptMaestroUtxoToApolloUtxo converts a Maestro UTxO to Apollo UTxO
-func adaptMaestroUtxoToApolloUtxo(mUtxo models.Utxo) (UTxO.UTxO, error) {
+// utxoCacheKey builds the cache key for a UTxO's raw CBOR.
+func utxoCacheKey(txHash string, index int) string {
+	return txHash + "#" + strconv.Itoa(index)
+}
+
+// adaptMaestroUtxoToApolloUtxo converts a Maestro UTxO to Apollo UTxO.
+// It returns the decoded Apollo UTxO and the original txout_cbor hex
+// so callers can cache it for later re-use.
+func adaptMaestroUtxoToApolloUtxo(mUtxo models.Utxo) (UTxO.UTxO, string, error) {
 	utxo := UTxO.UTxO{}
 	decodedHash, _ := hex.DecodeString(mUtxo.TxHash)
 	utxo.Input = TransactionInput.TransactionInput{
@@ -113,11 +120,11 @@ func adaptMaestroUtxoToApolloUtxo(mUtxo models.Utxo) (UTxO.UTxO, error) {
 	decodedCbor, _ := hex.DecodeString(mUtxo.TxOutCbor)
 	err := cbor.Unmarshal(decodedCbor, &output)
 	if err != nil {
-		return UTxO.UTxO{}, err
+		return UTxO.UTxO{}, "", err
 	}
 	utxo.Output = output
 
-	return utxo, nil
+	return utxo, mUtxo.TxOutCbor, nil
 }
 
 // adaptMaestroDelegation converts Maestro account info to connector delegation
@@ -133,30 +140,43 @@ func adaptMaestroDelegation(
 	}
 }
 
-// adaptApolloUtxosToMaestro converts Apollo UTxOs to Maestro format for evaluation
+// adaptApolloUtxosToMaestro converts Apollo UTxOs to Maestro format for evaluation.
+// lookupRawCbor, when non-nil, is called with the cache key ("txhash#index") and
+// should return the original txout_cbor hex if available. Using the original bytes
+// avoids CBOR re-encoding mismatches that Maestro rejects as "Malformed additional UTxO".
 func adaptApolloUtxosToMaestro(
 	apollo []UTxO.UTxO,
+	lookupRawCbor func(key string) (string, bool),
 ) ([]models.AdditionalUtxo, error) {
 	out := make([]models.AdditionalUtxo, 0, len(apollo))
 	for _, u := range apollo {
 		txHash := hex.EncodeToString(u.Input.TransactionId)
+		idx := u.Input.Index
+		key := utxoCacheKey(txHash, idx)
 
-		idx := int64(u.Input.Index)
-
-		raw, err := cbor.Marshal(u.Output)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cbor-marshal output for %s#%d: %w",
-				txHash,
-				idx,
-				err,
-			)
+		var txoutCbor string
+		if lookupRawCbor != nil {
+			if cached, ok := lookupRawCbor(key); ok {
+				txoutCbor = cached
+			}
 		}
-		txoutCbor := hex.EncodeToString(raw)
+		if txoutCbor == "" {
+			// Fallback: re-marshal through Apollo (may produce different CBOR)
+			raw, err := cbor.Marshal(u.Output)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cbor-marshal output for %s#%d: %w",
+					txHash,
+					idx,
+					err,
+				)
+			}
+			txoutCbor = hex.EncodeToString(raw)
+		}
 
 		out = append(out, models.AdditionalUtxo{
 			TxHash:    txHash,
-			Index:     int(idx),
+			Index:     idx,
 			TxoutCbor: txoutCbor,
 		})
 	}
