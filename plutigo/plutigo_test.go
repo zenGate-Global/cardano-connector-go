@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Salvionied/apollo/constants"
 	"github.com/Salvionied/apollo/serialization/PlutusData"
 	"github.com/Salvionied/apollo/serialization/Redeemer"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	connector "github.com/zenGate-Global/cardano-connector-go"
+	"github.com/zenGate-Global/cardano-connector-go/blockfrost"
 	fixture "github.com/zenGate-Global/cardano-connector-go/tests"
 )
 
@@ -109,6 +114,92 @@ func (s *stubProvider) EvaluateTx(ctx context.Context, tx []byte, additionalUTxO
 
 func (s *stubProvider) GetScriptCborByScriptHash(ctx context.Context, scriptHash string) (string, error) {
 	return s.scriptCbor, s.scriptErr
+}
+
+type retryProvider struct {
+	connector.Provider
+}
+
+func (r *retryProvider) GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (Base.ProtocolParameters, error) {
+		return r.Provider.GetProtocolParameters(callCtx)
+	})
+}
+
+func (r *retryProvider) GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (Base.GenesisParameters, error) {
+		return r.Provider.GetGenesisParams(callCtx)
+	})
+}
+
+func (r *retryProvider) GetTip(ctx context.Context) (connector.Tip, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (connector.Tip, error) {
+		return r.Provider.GetTip(callCtx)
+	})
+}
+
+func (r *retryProvider) GetDatum(ctx context.Context, datumHash string) (PlutusData.PlutusData, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (PlutusData.PlutusData, error) {
+		return r.Provider.GetDatum(callCtx, datumHash)
+	})
+}
+
+func (r *retryProvider) GetScriptCborByScriptHash(ctx context.Context, scriptHash string) (string, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (string, error) {
+		return r.Provider.GetScriptCborByScriptHash(callCtx, scriptHash)
+	})
+}
+
+func setupBlockfrostLocalEval(t *testing.T) *PlutigoProvider {
+	t.Helper()
+
+	projectID := os.Getenv("BLOCKFROST_KEY")
+	if projectID == "" {
+		t.Skip("BLOCKFROST_KEY environment variable not set")
+	}
+
+	resolver, err := blockfrost.New(blockfrost.Config{
+		ProjectID:   projectID,
+		NetworkName: "preprod",
+		NetworkId:   int(constants.PREPROD),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create Blockfrost provider: %v", err)
+	}
+
+	localEval, err := Wrap(&retryProvider{Provider: resolver})
+	if err != nil {
+		t.Fatalf("Wrap failed: %v", err)
+	}
+	return localEval
+}
+
+func retryLookup[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		value, err := fn(ctx)
+		if err == nil {
+			return value, nil
+		}
+		if !isTimeoutLikeError(err) {
+			return zero, err
+		}
+		lastErr = err
+	}
+	return zero, lastErr
+}
+
+func isTimeoutLikeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "Client.Timeout exceeded")
 }
 
 func TestWrap(t *testing.T) {
@@ -238,4 +329,98 @@ func TestApolloUtxoToLedgerFallsBackWithoutScriptRef(t *testing.T) {
 	if converted.Output.ScriptRef() != nil {
 		t.Fatal("expected script ref to be stripped during fallback conversion")
 	}
+}
+
+func TestEvaluateTxSample1WithBlockfrostResolver(t *testing.T) {
+	localEval := setupBlockfrostLocalEval(t)
+	ctx := context.Background()
+
+	txBytes, err := hex.DecodeString(fixture.ApolloEvalSample1Transaction)
+	if err != nil {
+		t.Fatalf("decode fixture tx: %v", err)
+	}
+
+	redeemers, err := localEval.EvaluateTx(ctx, txBytes, fixture.ApolloEvalSample1UTxOs)
+	if err != nil {
+		t.Fatalf("EvaluateTx failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample1RedeemersExUnits) {
+		t.Fatalf(
+			"expected redeemers %+v, got %+v",
+			fixture.ApolloEvalSample1RedeemersExUnits,
+			redeemers,
+		)
+	}
+}
+
+func TestEvaluateTxSample2WithBlockfrostResolver(t *testing.T) {
+	localEval := setupBlockfrostLocalEval(t)
+	ctx := context.Background()
+
+	txBytes, err := hex.DecodeString(fixture.ApolloEvalSample2Transaction)
+	if err != nil {
+		t.Fatalf("decode fixture tx: %v", err)
+	}
+
+	redeemers := evaluateTxOrSkipIfResolverMissing(
+		t,
+		ctx,
+		localEval,
+		txBytes,
+		fixture.ApolloEvalSample2UTxOs,
+	)
+
+	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample2RedeemersExUnits) {
+		t.Fatalf(
+			"expected redeemers %+v, got %+v",
+			fixture.ApolloEvalSample2RedeemersExUnits,
+			redeemers,
+		)
+	}
+}
+
+func TestEvaluateTxSample3WithBlockfrostResolver(t *testing.T) {
+	localEval := setupBlockfrostLocalEval(t)
+	ctx := context.Background()
+
+	txBytes, err := hex.DecodeString(fixture.ApolloEvalSample3Transaction)
+	if err != nil {
+		t.Fatalf("decode fixture tx: %v", err)
+	}
+
+	redeemers := evaluateTxOrSkipIfResolverMissing(
+		t,
+		ctx,
+		localEval,
+		txBytes,
+		fixture.ApolloEvalSample3UTxOs,
+	)
+
+	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample3RedeemersExUnits) {
+		t.Fatalf(
+			"expected redeemers %+v, got %+v",
+			fixture.ApolloEvalSample3RedeemersExUnits,
+			redeemers,
+		)
+	}
+}
+
+func evaluateTxOrSkipIfResolverMissing(
+	t *testing.T,
+	ctx context.Context,
+	localEval *PlutigoProvider,
+	txBytes []byte,
+	additionalUTxOs []UTxO.UTxO,
+) map[string]Redeemer.ExecutionUnits {
+	t.Helper()
+
+	redeemers, err := localEval.EvaluateTx(ctx, txBytes, additionalUTxOs)
+	if err != nil {
+		if errors.Is(err, connector.ErrNotFound) {
+			t.Skipf("Skipping local eval fixture because the wrapped resolver cannot supply required chain data: %v", err)
+		}
+		t.Fatalf("EvaluateTx failed: %v", err)
+	}
+	return redeemers
 }

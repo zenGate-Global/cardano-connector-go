@@ -782,6 +782,13 @@ func (kp *KupmiosProvider) GetScriptCborByScriptHash(
 			err,
 		)
 	}
+	if scriptCbor == nil || scriptCbor.Script == "" {
+		return "", fmt.Errorf(
+			"kupmios: script not found for hash %s: %w",
+			scriptHash,
+			connector.ErrNotFound,
+		)
+	}
 
 	return scriptCbor.Script, nil
 }
