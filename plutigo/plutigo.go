@@ -623,13 +623,24 @@ func (p *PlutigoProvider) resolveScript(
 }
 
 func apolloUtxoToLedger(utxo UTxO.UTxO) (lcommon.Utxo, error) {
-	outputCbor, err := cbor.Marshal(utxo.Output)
+	output := utxo.Output
+	outputCbor, err := output.MarshalCBOR()
 	if err != nil {
 		return lcommon.Utxo{}, fmt.Errorf("marshal transaction output: %w", err)
 	}
 	decodedOutput, err := ledger.NewTransactionOutputFromCbor(outputCbor)
 	if err != nil {
-		return lcommon.Utxo{}, fmt.Errorf("decode transaction output: %w", err)
+		if output.IsPostAlonzo && output.PostAlonzo.ScriptRef != nil {
+			outputWithoutScriptRef := output.Clone()
+			outputWithoutScriptRef.PostAlonzo.ScriptRef = nil
+			outputCbor, marshalErr := outputWithoutScriptRef.MarshalCBOR()
+			if marshalErr == nil {
+				decodedOutput, err = ledger.NewTransactionOutputFromCbor(outputCbor)
+			}
+		}
+		if err != nil {
+			return lcommon.Utxo{}, fmt.Errorf("decode transaction output: %w", err)
+		}
 	}
 	input := shelley.NewShelleyTransactionInput(hex.EncodeToString(utxo.Input.TransactionId), utxo.Input.Index)
 	return lcommon.Utxo{

@@ -240,3 +240,16 @@ func TestEvaluateTxUsesWrappedProviderForInputResolution(t *testing.T) {
 		t.Fatal("expected at least one requested out-ref")
 	}
 }
+
+func TestApolloUtxoToLedgerFallsBackWithoutScriptRef(t *testing.T) {
+	converted, err := apolloUtxoToLedger(fixture.ApolloDiscoveryUTxO)
+	if err != nil {
+		t.Fatalf("apolloUtxoToLedger failed: %v", err)
+	}
+	if converted.Output == nil {
+		t.Fatal("expected converted output")
+	}
+	if converted.Output.ScriptRef() != nil {
+		t.Fatal("expected script ref to be stripped during fallback conversion")
+	}
+}

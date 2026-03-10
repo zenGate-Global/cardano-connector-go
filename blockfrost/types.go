@@ -1,6 +1,8 @@
 package blockfrost
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 
 	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
@@ -60,6 +62,44 @@ type bfScriptCbor struct {
 	ScriptCbor string `json:"cbor"`
 }
 
+type orderedIntMap struct {
+	order  []string
+	values map[string]int64
+}
+
+func (m *orderedIntMap) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return nil
+	}
+
+	m.order = m.order[:0]
+	m.values = make(map[string]int64)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil
+		}
+		var value int64
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		m.order = append(m.order, key)
+		m.values[key] = value
+	}
+	_, err = decoder.Token()
+	return err
+}
+
 type Config struct {
 	ProjectID                 string
 	NetworkName               string // e.g., "mainnet", "preprod", "preview"
@@ -112,7 +152,7 @@ type BlockfrostProtocolParameters struct {
 	MaxCollateralInuts               int                         `json:"max_collateral_inputs"`
 	CoinsPerUtxoWord                 string                      `json:"coins_per_utxo_word"`
 	CoinsPerUtxoByte                 string                      `json:"coins_per_utxo_byte"`
-	CostModels                       map[string]map[string]int64 `json:"cost_models"`
+	CostModels                       map[string]orderedIntMap    `json:"cost_models"`
 	MaximumReferenceScriptsSize      int                         `json:"maximum_reference_scripts_size"`
 	MinFeeReferenceScriptsRange      int                         `json:"min_fee_reference_scripts_range"`
 	MinFeeReferenceScriptsBase       int                         `json:"min_fee_reference_scripts_base"`
