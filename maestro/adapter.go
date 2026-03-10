@@ -2,6 +2,8 @@ package maestro
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -31,7 +33,7 @@ func parseMaestroFloat(floatString string) float32 {
 // This function maps the actual Maestro SDK protocol parameters structure based on the user's provided code
 func adaptMaestroProtocolParams(
 	p models.ProtocolParams,
-) Base.ProtocolParameters {
+) (Base.ProtocolParameters, error) {
 	protocolParams := Base.ProtocolParameters{}
 
 	// Map ALL the fields
@@ -60,8 +62,6 @@ func adaptMaestroProtocolParams(
 	protocolParams.ExtraEntropy = ""
 	protocolParams.ProtocolMajorVersion = int(p.ProtocolVersion.Major)
 	protocolParams.ProtocolMinorVersion = int(p.ProtocolVersion.Minor)
-	// CHECK HERE
-	// protocolParams.MinUtxo = ppFromApi.Data.
 	protocolParams.MinPoolCost = strconv.FormatInt(
 		p.MinStakePoolCost.LovelaceAmount.Lovelace,
 		10,
@@ -92,13 +92,60 @@ func adaptMaestroProtocolParams(
 		10,
 	)
 	protocolParams.CoinsPerUtxoWord = "0"
-	// protocolParams.CostModels = ppFromApi.Data.CostModels
+
+	costModels, err := normalizeMaestroCostModels(p.PlutusCostModels)
+	if err != nil {
+		return Base.ProtocolParameters{}, err
+	}
+	protocolParams.CostModels = costModels
 	protocolParams.MaximumReferenceScriptsSize = 0
 	protocolParams.MinFeeReferenceScriptsRange = 0
 	protocolParams.MinFeeReferenceScriptsBase = 0
 	protocolParams.MinFeeReferenceScriptsMultiplier = 0
 
-	return protocolParams
+	return protocolParams, nil
+}
+
+func normalizeMaestroCostModels(raw any) (map[string][]int64, error) {
+	if raw == nil {
+		return nil, errors.New("maestro: protocol parameters are missing plutus_cost_models")
+	}
+
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("maestro: marshal plutus_cost_models: %w", err)
+	}
+
+	var decoded map[string][]int64
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return nil, fmt.Errorf("maestro: decode plutus_cost_models: %w", err)
+	}
+
+	keyAliases := map[string]string{
+		"plutus_v1": "PlutusV1",
+		"plutus_v2": "PlutusV2",
+		"plutus_v3": "PlutusV3",
+		"PlutusV1":  "PlutusV1",
+		"PlutusV2":  "PlutusV2",
+		"PlutusV3":  "PlutusV3",
+	}
+
+	result := make(map[string][]int64, 3)
+	for sourceKey, targetKey := range keyAliases {
+		values, ok := decoded[sourceKey]
+		if !ok {
+			continue
+		}
+		copied := make([]int64, len(values))
+		copy(copied, values)
+		result[targetKey] = copied
+	}
+
+	if len(result) == 0 {
+		return nil, errors.New("maestro: protocol parameters contain no supported cost models")
+	}
+
+	return result, nil
 }
 
 // utxoCacheKey builds the cache key for a UTxO's raw CBOR.

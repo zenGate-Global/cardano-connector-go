@@ -6,9 +6,10 @@ import (
 )
 
 type KupmiosProvider struct {
-	ogmigoClient *ogmigo.Client
-	kugoClient   *kugo.Client
-	networkId    int
+	ogmigoClient   *ogmigo.Client
+	kugoClient     *kugo.Client
+	ogmiosEndpoint string
+	networkId      int
 }
 
 type Config struct {

@@ -40,11 +40,22 @@ func New(config Config) (*MaestroProvider, error) {
 	}
 
 	maestroClient := client.NewClient(config.ProjectID, networkName)
+	genesisParams, err := resolveGenesisParams(config, networkName)
+	if err != nil {
+		return nil, err
+	}
+	protocolParamsPreset, err := resolveProtocolParamsPreset(networkName)
+	if err != nil {
+		return nil, err
+	}
 
 	provider := &MaestroProvider{
-		client:      maestroClient,
-		networkName: networkName,
-		networkId:   config.NetworkId,
+		client:                 maestroClient,
+		genesisParams:          genesisParams,
+		protocolParamsOverride: config.ProtocolParamsOverride,
+		protocolParamsPreset:   protocolParamsPreset,
+		networkName:            networkName,
+		networkId:              config.NetworkId,
 	}
 
 	return provider, nil
@@ -84,6 +95,10 @@ func (m *MaestroProvider) Epoch(ctx context.Context) (int, error) {
 func (m *MaestroProvider) GetProtocolParameters(
 	ctx context.Context,
 ) (Base.ProtocolParameters, error) {
+	if m.protocolParamsOverride != nil {
+		return *m.protocolParamsOverride, nil
+	}
+
 	maestroParams, err := m.client.ProtocolParameters()
 	if err != nil {
 		return Base.ProtocolParameters{}, fmt.Errorf(
@@ -92,17 +107,21 @@ func (m *MaestroProvider) GetProtocolParameters(
 		)
 	}
 
-	return adaptMaestroProtocolParams(maestroParams.Data), nil
+	protocolParams, err := adaptMaestroProtocolParams(maestroParams.Data)
+	if err != nil {
+		return Base.ProtocolParameters{}, fmt.Errorf(
+			"maestro: failed to adapt protocol parameters: %w",
+			err,
+		)
+	}
+	return mergeMaestroProtocolParams(protocolParams, m.protocolParamsPreset), nil
 }
 
-// Maestro does not provide a genesis parameters endpoint.
 func (m *MaestroProvider) GetGenesisParams(
 	ctx context.Context,
 ) (Base.GenesisParameters, error) {
-	return Base.GenesisParameters{}, fmt.Errorf(
-		"maestro does not provide a genesis parameters endpoint: %w",
-		connector.ErrNotImplemented,
-	)
+	_ = ctx
+	return m.genesisParams, nil
 }
 
 // GetTip returns the current tip of the blockchain.

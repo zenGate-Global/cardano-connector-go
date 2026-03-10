@@ -84,24 +84,9 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 			bigIntToUint64(cardanoParams.GetPoolDeposit()),
 			10,
 		),
-		PooolInfluence: float32(
-			uint32(
-				cardanoParams.GetPoolInfluence().GetNumerator(),
-			) / cardanoParams.GetPoolInfluence().
-				GetDenominator(),
-		),
-		MonetaryExpansion: float32(
-			uint32(
-				cardanoParams.GetMonetaryExpansion().GetNumerator(),
-			) / cardanoParams.GetMonetaryExpansion().
-				GetDenominator(),
-		),
-		TreasuryExpansion: float32(
-			uint32(
-				cardanoParams.GetTreasuryExpansion().GetNumerator(),
-			) / cardanoParams.GetTreasuryExpansion().
-				GetDenominator(),
-		),
+		PooolInfluence:        rationalToFloat32(cardanoParams.GetPoolInfluence()),
+		MonetaryExpansion:     rationalToFloat32(cardanoParams.GetMonetaryExpansion()),
+		TreasuryExpansion:     rationalToFloat32(cardanoParams.GetTreasuryExpansion()),
 		DecentralizationParam: 0,
 		ExtraEntropy:          "",
 		ProtocolMajorVersion: int(
@@ -112,20 +97,8 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 		),
 		// MinUtxo:               fmt.Sprintf("%d", cardanoParams),
 		MinPoolCost: strconv.FormatUint(bigIntToUint64(cardanoParams.GetMinPoolCost()), 10),
-		PriceMem: float32(
-			uint32(
-				cardanoParams.GetPrices().GetMemory().GetNumerator(),
-			) / cardanoParams.GetPrices().
-				GetMemory().
-				GetDenominator(),
-		),
-		PriceStep: float32(
-			uint32(
-				cardanoParams.GetPrices().GetSteps().GetNumerator(),
-			) / cardanoParams.GetPrices().
-				GetSteps().
-				GetDenominator(),
-		),
+		PriceMem:    rationalToFloat32(cardanoParams.GetPrices().GetMemory()),
+		PriceStep:   rationalToFloat32(cardanoParams.GetPrices().GetSteps()),
 		MaxTxExMem: strconv.FormatUint(
 			cardanoParams.GetMaxExecutionUnitsPerTransaction().GetMemory(),
 			10,
@@ -159,7 +132,7 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 			"PlutusV3": cardanoParams.GetCostModels().GetPlutusV3().GetValues(),
 		},
 	}
-	return pp, nil
+	return mergeProtocolParamsWithPreset(pp, protocolParamsPreset), nil
 }
 
 func (u *UtxorpcProvider) GetGenesisParams(
@@ -599,6 +572,13 @@ func bigIntToInt64(b *cardano.BigInt) int64 {
 	default:
 		return 0
 	}
+}
+
+func rationalToFloat32(v *cardano.RationalNumber) float32 {
+	if v == nil || v.GetDenominator() == 0 {
+		return 0
+	}
+	return float32(v.GetNumerator()) / float32(v.GetDenominator())
 }
 
 func convertGRPCError(err error) error {
