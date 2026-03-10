@@ -1,0 +1,242 @@
+package plutigo
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/Salvionied/apollo/serialization/PlutusData"
+	"github.com/Salvionied/apollo/serialization/Redeemer"
+	"github.com/Salvionied/apollo/serialization/UTxO"
+	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	connector "github.com/zenGate-Global/cardano-connector-go"
+	fixture "github.com/zenGate-Global/cardano-connector-go/tests"
+)
+
+type stubProvider struct {
+	network          int
+	epoch            int
+	epochErr         error
+	tip              connector.Tip
+	tipErr           error
+	protocolParams   Base.ProtocolParameters
+	protocolErr      error
+	genesisParams    Base.GenesisParameters
+	genesisErr       error
+	utxosByAddress   []UTxO.UTxO
+	utxosAddrErr     error
+	utxosWithUnit    []UTxO.UTxO
+	utxosWithUnitErr error
+	utxoByUnit       *UTxO.UTxO
+	utxoByUnitErr    error
+	outRefsResult    []UTxO.UTxO
+	outRefsErr       error
+	outRefsCalls     int
+	lastOutRefs      []connector.OutRef
+	delegation       connector.Delegation
+	delegationErr    error
+	datum            PlutusData.PlutusData
+	datumErr         error
+	awaitResult      bool
+	awaitErr         error
+	submitHash       string
+	submitErr        error
+	evalResult       map[string]Redeemer.ExecutionUnits
+	evalErr          error
+	scriptCbor       string
+	scriptErr        error
+}
+
+func (s *stubProvider) GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error) {
+	return s.protocolParams, s.protocolErr
+}
+
+func (s *stubProvider) GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error) {
+	return s.genesisParams, s.genesisErr
+}
+
+func (s *stubProvider) Network() int {
+	return s.network
+}
+
+func (s *stubProvider) Epoch(ctx context.Context) (int, error) {
+	return s.epoch, s.epochErr
+}
+
+func (s *stubProvider) GetTip(ctx context.Context) (connector.Tip, error) {
+	return s.tip, s.tipErr
+}
+
+func (s *stubProvider) GetUtxosByAddress(ctx context.Context, addr string) ([]UTxO.UTxO, error) {
+	return s.utxosByAddress, s.utxosAddrErr
+}
+
+func (s *stubProvider) GetUtxosWithUnit(ctx context.Context, addr string, unit string) ([]UTxO.UTxO, error) {
+	return s.utxosWithUnit, s.utxosWithUnitErr
+}
+
+func (s *stubProvider) GetUtxoByUnit(ctx context.Context, unit string) (*UTxO.UTxO, error) {
+	return s.utxoByUnit, s.utxoByUnitErr
+}
+
+func (s *stubProvider) GetUtxosByOutRef(ctx context.Context, outRefs []connector.OutRef) ([]UTxO.UTxO, error) {
+	s.outRefsCalls++
+	s.lastOutRefs = append([]connector.OutRef(nil), outRefs...)
+	return s.outRefsResult, s.outRefsErr
+}
+
+func (s *stubProvider) GetDelegation(ctx context.Context, rewardAddress string) (connector.Delegation, error) {
+	return s.delegation, s.delegationErr
+}
+
+func (s *stubProvider) GetDatum(ctx context.Context, datumHash string) (PlutusData.PlutusData, error) {
+	return s.datum, s.datumErr
+}
+
+func (s *stubProvider) AwaitTx(ctx context.Context, txHash string, checkInterval time.Duration) (bool, error) {
+	return s.awaitResult, s.awaitErr
+}
+
+func (s *stubProvider) SubmitTx(ctx context.Context, tx []byte) (string, error) {
+	return s.submitHash, s.submitErr
+}
+
+func (s *stubProvider) EvaluateTx(ctx context.Context, tx []byte, additionalUTxOs []UTxO.UTxO) (map[string]Redeemer.ExecutionUnits, error) {
+	return s.evalResult, s.evalErr
+}
+
+func (s *stubProvider) GetScriptCborByScriptHash(ctx context.Context, scriptHash string) (string, error) {
+	return s.scriptCbor, s.scriptErr
+}
+
+func TestWrap(t *testing.T) {
+	provider := &stubProvider{network: 5}
+
+	localEval, err := Wrap(provider)
+	if err != nil {
+		t.Fatalf("Wrap failed: %v", err)
+	}
+
+	if got := localEval.Network(); got != 5 {
+		t.Fatalf("expected wrapped provider network 5, got %d", got)
+	}
+}
+
+func TestProviderFieldPreferredOverResolver(t *testing.T) {
+	provider := &stubProvider{network: 7}
+	resolver := &stubProvider{network: 3}
+
+	localEval, err := New(Config{Provider: provider, Resolver: resolver})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if got := localEval.Network(); got != 7 {
+		t.Fatalf("expected provider network 7, got %d", got)
+	}
+}
+
+func TestOverridesBeatWrappedProvider(t *testing.T) {
+	provider := &stubProvider{
+		protocolParams: Base.ProtocolParameters{ProtocolMajorVersion: 10},
+		genesisParams:  Base.GenesisParameters{SystemStart: 1},
+	}
+	protocolOverride := &Base.ProtocolParameters{ProtocolMajorVersion: 99}
+	genesisOverride := &Base.GenesisParameters{SystemStart: 42}
+
+	localEval, err := New(Config{
+		Provider:               provider,
+		ProtocolParamsOverride: protocolOverride,
+		GenesisParamsOverride:  genesisOverride,
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	ctx := context.Background()
+	protocolParams, err := localEval.GetProtocolParameters(ctx)
+	if err != nil {
+		t.Fatalf("GetProtocolParameters failed: %v", err)
+	}
+	if protocolParams.ProtocolMajorVersion != 99 {
+		t.Fatalf("expected protocol override 99, got %d", protocolParams.ProtocolMajorVersion)
+	}
+
+	genesisParams, err := localEval.GetGenesisParams(ctx)
+	if err != nil {
+		t.Fatalf("GetGenesisParams failed: %v", err)
+	}
+	if genesisParams.SystemStart != 42 {
+		t.Fatalf("expected genesis override 42, got %d", genesisParams.SystemStart)
+	}
+}
+
+func TestDelegatesNonEvaluateMethods(t *testing.T) {
+	provider := &stubProvider{
+		network: 11,
+		epoch:   12,
+		tip: connector.Tip{
+			Hash:   "tip-hash",
+			Slot:   13,
+			Height: 14,
+		},
+		awaitResult: true,
+		submitHash:  "submitted-hash",
+	}
+
+	localEval, err := New(Config{Provider: provider})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	ctx := context.Background()
+	if got := localEval.Network(); got != 11 {
+		t.Fatalf("expected network 11, got %d", got)
+	}
+	if epoch, err := localEval.Epoch(ctx); err != nil || epoch != 12 {
+		t.Fatalf("expected epoch 12 with nil error, got %d and %v", epoch, err)
+	}
+	if tip, err := localEval.GetTip(ctx); err != nil || tip.Hash != "tip-hash" || tip.Slot != 13 || tip.Height != 14 {
+		t.Fatalf("unexpected tip result: %#v err=%v", tip, err)
+	}
+	if ok, err := localEval.AwaitTx(ctx, "abc", time.Second); err != nil || !ok {
+		t.Fatalf("expected AwaitTx delegation success, got %v and %v", ok, err)
+	}
+	if txHash, err := localEval.SubmitTx(ctx, []byte{1, 2, 3}); err != nil || txHash != "submitted-hash" {
+		t.Fatalf("expected SubmitTx delegation success, got %q and %v", txHash, err)
+	}
+}
+
+func TestEvaluateTxUsesWrappedProviderForInputResolution(t *testing.T) {
+	txBytes, err := hex.DecodeString(fixture.ApolloEvalSample1Transaction)
+	if err != nil {
+		t.Fatalf("decode fixture tx: %v", err)
+	}
+
+	protocolErr := errors.New("protocol lookup hit wrapped provider")
+	provider := &stubProvider{
+		outRefsResult: fixture.ApolloEvalSample1UTxOs,
+		protocolErr:   protocolErr,
+	}
+
+	localEval, err := New(Config{Provider: provider})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	_, err = localEval.EvaluateTx(context.Background(), txBytes, nil)
+	if err == nil {
+		t.Fatal("expected EvaluateTx to fail once wrapped provider protocol lookup is reached")
+	}
+	if !errors.Is(err, protocolErr) {
+		t.Fatalf("expected wrapped protocol error, got %v", err)
+	}
+	if provider.outRefsCalls == 0 {
+		t.Fatal("expected wrapped provider to be used for missing input resolution")
+	}
+	if len(provider.lastOutRefs) == 0 {
+		t.Fatal("expected at least one requested out-ref")
+	}
+}

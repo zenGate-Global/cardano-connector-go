@@ -49,3 +49,27 @@ The library defines a `Provider` interface that standardizes access to essential
 - utxorpc eval not working, unable to find fully functional api providers atm
 - plutus script bytes -> plutus script type matching needs to be implemented, its harded coded to v2 atm
 - make sure maestro protocol params are all filled as much as possible
+
+## Local transaction evaluation with Plutigo
+
+The `plutigo` package adds a `connector.Provider` wrapper for local transaction evaluation.
+
+- `EvaluateTx` runs locally with `gouroboros` and `plutigo`.
+- All other `Provider` methods delegate to the wrapped provider.
+- `additionalUTxOs` are preferred over fetched chain data.
+- A wrapped provider can be supplied to fetch missing inputs, scripts, datums, protocol parameters, and genesis parameters before local evaluation starts.
+
+Example:
+
+```go
+resolver := kupmios.NewKupmiosChainContext(...)
+
+localEval, err := plutigo.Wrap(resolver)
+if err != nil {
+    panic(err)
+}
+
+exUnits, err := localEval.EvaluateTx(ctx, txCbor, additionalUTxOs)
+```
+
+If the wrapped provider does not expose enough protocol or genesis data, use `plutigo.New(plutigo.Config{...})` and provide `ProtocolParamsOverride`, `GenesisParamsOverride`, or `SlotConfig`.

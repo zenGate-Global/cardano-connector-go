@@ -8,11 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/Salvionied/apollo/constants"
 	"github.com/Salvionied/apollo/serialization/UTxO"
 	"github.com/Salvionied/cbor/v2"
+	"github.com/stretchr/testify/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	"github.com/zenGate-Global/cardano-connector-go/tests"
 )
