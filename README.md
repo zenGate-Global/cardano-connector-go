@@ -55,31 +55,137 @@ The library defines a `Provider` interface that standardizes access to essential
 The `plutigo` package adds a `connector.Provider` wrapper for local transaction evaluation.
 
 - `EvaluateTx` runs locally with `gouroboros` and `plutigo`.
-- All other `Provider` methods delegate to the wrapped provider.
+- All other `Provider` methods still delegate to the wrapped provider.
 - `additionalUTxOs` are preferred over fetched chain data.
-- A wrapped provider can be supplied to fetch missing inputs, scripts, datums, protocol parameters, and genesis parameters before local evaluation starts.
+- The wrapped provider is used only to fetch any missing prerequisites for local eval:
+  - spent/reference inputs
+  - datums
+  - scripts
+  - protocol parameters
+  - genesis / slot timing data
 
-Example:
+This means the normal integration pattern is:
+
+- use `blockfrost`, `kupmios`, `maestro`, or `utxorpc` as your normal provider
+- wrap it with `plutigo`
+- pass the wrapped provider anywhere your code expects `connector.Provider`
+- keep reads and submission remote
+- run only script evaluation locally
+
+### Common usage
 
 ```go
-resolver, err := kupmios.New(kupmios.Config{
-    OgmigoEndpoint: "wss://ogmios.example",
-    KupoEndpoint:   "https://kupo.example",
-    NetworkId:      0,
+base, err := blockfrost.New(blockfrost.Config{
+    ProjectID: "<blockfrost-project-id>",
+    BaseURL:   "https://cardano-preview.blockfrost.io/api/v0",
+    NetworkId: 0,
 })
 if err != nil {
     panic(err)
 }
 
-localEval, err := plutigo.Wrap(resolver)
+provider, err := plutigo.Wrap(base)
+if err != nil {
+    panic(err)
+}
+
+// Use provider normally everywhere else:
+utxos, err := provider.GetUtxosByAddress(ctx, addr)
+txHash, err := provider.SubmitTx(ctx, signedTx)
+
+// Only EvaluateTx is local:
+exUnits, err := provider.EvaluateTx(ctx, txCbor, additionalUTxOs)
+```
+
+### How this is typically used in an app
+
+If your transaction builder or wallet layer already accepts `connector.Provider`, no builder changes are needed. Wrap the provider once at construction time:
+
+```go
+base, err := blockfrost.New(blockfrost.Config{
+    ProjectID: "<project-id>",
+    BaseURL:   "https://cardano-preview.blockfrost.io/api/v0",
+    NetworkId: 0,
+})
+if err != nil {
+    panic(err)
+}
+
+provider := connector.Provider(base)
+if cfg.LocalTxEval {
+    provider, err = plutigo.Wrap(base)
+    if err != nil {
+        panic(err)
+    }
+}
+
+// Pass provider into your tx builder / Apollo chain context / service layer.
+```
+
+That is the pattern used successfully in `merkle-oracle-node`: the wrapped provider was passed into the existing transaction flow, and Apollo continued calling `EvaluateTx(...)` through the same `connector.Provider` interface.
+
+### When to use `Wrap(...)` vs `New(...)`
+
+Use `Wrap(...)` for the normal case:
+
+```go
+provider, err := plutigo.Wrap(base)
+```
+
+Use `New(...)` only when the wrapped provider does not expose enough data for local eval and you need to supply overrides:
+
+```go
+provider, err := plutigo.New(plutigo.Config{
+    Provider:               base,
+    ProtocolParamsOverride: protocolParams,
+    GenesisParamsOverride:  genesisParams,
+    SlotConfig:             slotConfig,
+})
+```
+
+`SlotConfig` is useful when you know the correct network slot timing but your provider does not expose a usable genesis endpoint.
+
+### Provider notes
+
+- `blockfrost`
+  - validated for local eval in a real transaction flow
+  - good default choice for rollout
+- `kupmios`
+  - good fit in principle because it already has strong eval-related chain data
+- `maestro`
+  - can be wrapped, but local eval still depends on Maestro exposing enough protocol/genesis data
+  - if not, use `New(...)` with overrides
+- `utxorpc`
+  - same caveat as Maestro for slot/genesis/protocol prerequisites
+
+### Important behavior
+
+- This wrapper does not make your whole provider local.
+- It only changes script evaluation.
+- Reads like `GetUtxosByAddress`, `GetDatum`, `GetScriptCborByScriptHash`, `GetTip`, and `SubmitTx` still use the wrapped provider.
+- If local eval fails because required chain metadata is unavailable, either:
+  - choose a provider that exposes it, or
+  - pass explicit overrides with `plutigo.New(...)`
+
+### Minimal eval-only example
+
+```go
+base, err := blockfrost.New(blockfrost.Config{
+    ProjectID: "<blockfrost-project-id>",
+    BaseURL:   "https://cardano-preview.blockfrost.io/api/v0",
+    NetworkId: 0,
+})
+if err != nil {
+    panic(err)
+}
+
+localEval, err := plutigo.Wrap(base)
 if err != nil {
     panic(err)
 }
 
 exUnits, err := localEval.EvaluateTx(ctx, txCbor, additionalUTxOs)
 ```
-
-If the wrapped provider does not expose enough protocol or genesis data, use `plutigo.New(plutigo.Config{...})` and provide `ProtocolParamsOverride`, `GenesisParamsOverride`, or `SlotConfig`.
 
 ## Maestro genesis presets
 
