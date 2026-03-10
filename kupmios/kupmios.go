@@ -640,7 +640,7 @@ func (kp *KupmiosProvider) queryRewardAccountSummaries(
 		return nil, fmt.Errorf("failed to decode Ogmios delegation envelope: %w", err)
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("Ogmios delegation query failed: %s", response.Error.Message)
+		return nil, fmt.Errorf("ogmios delegation query failed: %s", response.Error.Message)
 	}
 
 	var asArray []ogmiosRewardAccountSummary
