@@ -2,11 +2,13 @@ package maestro
 
 import (
 	"encoding/hex"
+	"reflect"
 	"testing"
 
 	"github.com/Salvionied/apollo/serialization/TransactionInput"
 	"github.com/Salvionied/apollo/serialization/TransactionOutput"
 	"github.com/Salvionied/apollo/serialization/UTxO"
+	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
 )
 
@@ -43,6 +45,73 @@ func TestCBORRoundTripPreservation(t *testing.T) {
 	}
 
 	t.Logf("Round-trip stable: %v", hex.EncodeToString(reEncoded) == hex.EncodeToString(roundTrippedAgain))
+}
+
+func TestNormalizeMaestroCostModels(t *testing.T) {
+	raw := map[string]any{
+		"plutus_v1": []any{int64(100), float64(200), int64(300)},
+		"plutus_v2": []any{float64(1), float64(2), float64(3)},
+		"plutus_v3": []any{int64(9), int64(8), int64(7)},
+	}
+
+	costModels, err := normalizeMaestroCostModels(raw)
+	if err != nil {
+		t.Fatalf("normalizeMaestroCostModels failed: %v", err)
+	}
+
+	expected := map[string][]int64{
+		"PlutusV1": []int64{100, 200, 300},
+		"PlutusV2": []int64{1, 2, 3},
+		"PlutusV3": []int64{9, 8, 7},
+	}
+
+	if !reflect.DeepEqual(expected, costModels) {
+		t.Fatalf("unexpected cost models: got %#v want %#v", costModels, expected)
+	}
+}
+
+func TestNormalizeMaestroCostModelsRejectsMapEncodedVectors(t *testing.T) {
+	raw := map[string]any{
+		"plutus_v2": map[string]any{
+			"0": 1,
+			"1": 2,
+		},
+	}
+
+	if _, err := normalizeMaestroCostModels(raw); err == nil {
+		t.Fatal("expected normalizeMaestroCostModels to reject map-encoded vectors")
+	}
+}
+
+func TestMergeMaestroProtocolParamsUsesPresetForMissingFields(t *testing.T) {
+	current := Base.ProtocolParameters{
+		MinFeeConstant:   1,
+		CoinsPerUtxoByte: "4310",
+		CoinsPerUtxoWord: "0",
+	}
+	preset := Base.ProtocolParameters{
+		MinUtxo:                          "4310",
+		CoinsPerUtxoWord:                 "4310",
+		MinFeeReferenceScriptsMultiplier: 15,
+	}
+
+	merged := mergeMaestroProtocolParams(current, preset)
+
+	if merged.MinUtxo != "4310" {
+		t.Fatalf("expected MinUtxo to be filled from preset, got %q", merged.MinUtxo)
+	}
+	if merged.CoinsPerUtxoWord != "4310" {
+		t.Fatalf("expected CoinsPerUtxoWord to be filled from preset, got %q", merged.CoinsPerUtxoWord)
+	}
+	if merged.MinFeeReferenceScriptsMultiplier != 15 {
+		t.Fatalf(
+			"expected MinFeeReferenceScriptsMultiplier to be filled from preset, got %d",
+			merged.MinFeeReferenceScriptsMultiplier,
+		)
+	}
+	if merged.MinFeeConstant != 1 {
+		t.Fatalf("expected existing fields to be preserved, got %d", merged.MinFeeConstant)
+	}
 }
 
 // TestAdaptApolloUtxosToMaestro_NoCache verifies the adapter produces valid

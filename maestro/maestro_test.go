@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Salvionied/apollo/constants"
+	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 	"github.com/Salvionied/cbor/v2"
 	"github.com/tj/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
@@ -56,21 +57,142 @@ func TestGetProtocolParameters(t *testing.T) {
 	if pp.MaxTxSize == 0 {
 		t.Error("Expected non-zero MaxTxSize")
 	}
+	if len(pp.CostModels["PlutusV2"]) == 0 {
+		t.Error("Expected non-empty PlutusV2 cost model")
+	}
+	if pp.MinUtxo == "" {
+		t.Error("Expected non-empty MinUtxo")
+	}
+	if pp.CoinsPerUtxoWord == "" || pp.CoinsPerUtxoWord == "0" {
+		t.Error("Expected non-empty CoinsPerUtxoWord")
+	}
+	if pp.MinFeeReferenceScriptsMultiplier == 0 {
+		t.Error("Expected non-zero MinFeeReferenceScriptsMultiplier")
+	}
 }
 
 func TestGetGenesisParams(t *testing.T) {
-	m := setupMaestro(t)
+	m, err := New(Config{
+		ProjectID:   "test-project",
+		NetworkName: "preprod",
+		NetworkId:   int(constants.PREPROD),
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	ctx := context.Background()
 
-	_, err := m.GetGenesisParams(ctx)
-	if err == nil {
-		t.Fatal(
-			"Expected GetGenesisParams to fail since Maestro doesn't support it",
-		)
+	gp, err := m.GetGenesisParams(ctx)
+	if err != nil {
+		t.Fatalf("GetGenesisParams failed: %v", err)
 	}
 
-	// Maestro does not provide a genesis parameters endpoint
-	t.Logf("Expected error: %v", err)
+	assert.Equal(
+		t,
+		float32(0.05),
+		gp.ActiveSlotsCoefficient,
+		"ActiveSlotsCoefficient should be 0.05",
+	)
+	assert.Equal(t, 5, gp.UpdateQuorum, "UpdateQuorum should be 5")
+	assert.Equal(
+		t,
+		"45000000000000000",
+		gp.MaxLovelaceSupply,
+		"MaxLovelaceSupply should be 45000000000000000",
+	)
+	assert.Equal(t, 1, gp.NetworkMagic, "NetworkMagic should be 1")
+	assert.Equal(t, 432000, gp.EpochLength, "EpochLength should be 432000")
+	assert.Equal(
+		t,
+		1654041600,
+		gp.SystemStart,
+		"SystemStart should be 1654041600",
+	)
+	assert.Equal(
+		t,
+		129600,
+		gp.SlotsPerKesPeriod,
+		"SlotsPerKesPeriod should be 129600",
+	)
+	assert.Equal(t, 1, gp.SlotLength, "SlotLength should be 1")
+	assert.Equal(t, 62, gp.MaxKesEvolutions, "MaxKesEvolutions should be 62")
+	assert.Equal(t, 2160, gp.SecurityParam, "SecurityParam should be 2160")
+}
+
+func TestNewUsesGenesisOverride(t *testing.T) {
+	override := &Base.GenesisParameters{
+		NetworkMagic:  999,
+		SystemStart:   123,
+		SlotLength:    2,
+		EpochLength:   3,
+		SecurityParam: 4,
+	}
+
+	provider, err := New(Config{
+		ProjectID:             "test-project",
+		NetworkName:           "preprod",
+		NetworkId:             int(constants.PREPROD),
+		GenesisParamsOverride: override,
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	gp, err := provider.GetGenesisParams(context.Background())
+	if err != nil {
+		t.Fatalf("GetGenesisParams failed: %v", err)
+	}
+
+	assert.Equal(t, *override, gp, "expected genesis override to win")
+}
+
+func TestNewUsesProtocolParamsOverride(t *testing.T) {
+	override := &Base.ProtocolParameters{
+		MinFeeConstant:                   123,
+		CoinsPerUtxoWord:                 "456",
+		MinFeeReferenceScriptsMultiplier: 789,
+		CostModels: map[string][]int64{
+			"PlutusV2": []int64{1, 2, 3},
+		},
+	}
+
+	provider, err := New(Config{
+		ProjectID:              "test-project",
+		NetworkName:            "preprod",
+		NetworkId:              int(constants.PREPROD),
+		ProtocolParamsOverride: override,
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	pp, err := provider.GetProtocolParameters(context.Background())
+	if err != nil {
+		t.Fatalf("GetProtocolParameters failed: %v", err)
+	}
+
+	assert.Equal(t, *override, pp, "expected protocol params override to win")
+}
+
+func TestPreviewGenesisPreset(t *testing.T) {
+	provider, err := New(Config{
+		ProjectID:   "test-project",
+		NetworkName: "preview",
+		NetworkId:   int(constants.PREVIEW),
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	gp, err := provider.GetGenesisParams(context.Background())
+	if err != nil {
+		t.Fatalf("GetGenesisParams failed: %v", err)
+	}
+
+	assert.Equal(t, 2, gp.NetworkMagic, "NetworkMagic should be 2")
+	assert.Equal(t, 86400, gp.EpochLength, "EpochLength should be 86400")
+	assert.Equal(t, 1666656000, gp.SystemStart, "SystemStart should be 1666656000")
+	assert.Equal(t, 432, gp.SecurityParam, "SecurityParam should be 432")
 }
 
 func TestNetwork(t *testing.T) {

@@ -73,3 +73,11 @@ exUnits, err := localEval.EvaluateTx(ctx, txCbor, additionalUTxOs)
 ```
 
 If the wrapped provider does not expose enough protocol or genesis data, use `plutigo.New(plutigo.Config{...})` and provide `ProtocolParamsOverride`, `GenesisParamsOverride`, or `SlotConfig`.
+
+## Maestro genesis presets
+
+The Maestro provider includes hardcoded genesis presets for `mainnet`, `preprod`, and `preview` so `GetGenesisParams()` works even though Maestro does not expose a full genesis endpoint.
+
+If those network values ever change before this library is updated, pass `GenesisParamsOverride` in `maestro.Config` to override the built-in preset.
+
+The Maestro provider also includes hardcoded scalar protocol-parameter defaults for fields its SDK does not expose in the older `Base.ProtocolParameters` shape used by this repo. If those values ever change before this library is updated, pass `ProtocolParamsOverride` in `maestro.Config` to replace the built-in defaults entirely.
