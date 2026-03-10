@@ -7,6 +7,8 @@ require (
 	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.0
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.1.0
+	github.com/blinklabs-io/gouroboros v0.160.0
+	github.com/blinklabs-io/plutigo v0.0.26
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
@@ -20,8 +22,6 @@ require (
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
 	github.com/bits-and-blooms/bitset v1.20.0 // indirect
-	github.com/blinklabs-io/gouroboros v0.160.0 // indirect
-	github.com/blinklabs-io/plutigo v0.0.26 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.6 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.6 // indirect
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0 // indirect

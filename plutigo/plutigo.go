@@ -26,7 +26,6 @@ import (
 
 type Config struct {
 	Provider               connector.Provider
-	Resolver               connector.Provider
 	ProtocolParamsOverride *Base.ProtocolParameters
 	GenesisParamsOverride  *Base.GenesisParameters
 	SlotConfig             *SlotConfig
@@ -51,12 +50,8 @@ func New(config Config) (*PlutigoProvider, error) {
 	if config.SlotConfig != nil && config.SlotConfig.SlotLength <= 0 {
 		return nil, errors.New("plutigo: invalid slot config: slot length must be positive")
 	}
-	resolver := config.Provider
-	if resolver == nil {
-		resolver = config.Resolver
-	}
 	return &PlutigoProvider{
-		resolver:               resolver,
+		resolver:               config.Provider,
 		protocolParamsOverride: config.ProtocolParamsOverride,
 		genesisParamsOverride:  config.GenesisParamsOverride,
 		slotConfig:             config.SlotConfig,

@@ -124,20 +124,6 @@ func TestWrap(t *testing.T) {
 	}
 }
 
-func TestProviderFieldPreferredOverResolver(t *testing.T) {
-	provider := &stubProvider{network: 7}
-	resolver := &stubProvider{network: 3}
-
-	localEval, err := New(Config{Provider: provider, Resolver: resolver})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-
-	if got := localEval.Network(); got != 7 {
-		t.Fatalf("expected provider network 7, got %d", got)
-	}
-}
-
 func TestOverridesBeatWrappedProvider(t *testing.T) {
 	provider := &stubProvider{
 		protocolParams: Base.ProtocolParameters{ProtocolMajorVersion: 10},
