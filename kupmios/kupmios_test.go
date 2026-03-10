@@ -3,6 +3,7 @@ package kupmios
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -302,6 +303,9 @@ func TestGetDatum(t *testing.T) {
 		"9781f0bc32835479f5051e367556df615a9040714fe7df167782df8e3e5b76df",
 	)
 	if err != nil {
+		if errors.Is(err, connector.ErrNotFound) {
+			t.Skipf("Kupo no longer serves datum hash: %v", err)
+		}
 		t.Fatalf("GetDatum failed: %v", err)
 	}
 

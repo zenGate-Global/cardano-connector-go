@@ -19,6 +19,7 @@ import (
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync/num"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
+	"github.com/gorilla/websocket"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
@@ -33,9 +34,10 @@ func New(config Config) (*KupmiosProvider, error) {
 	)
 
 	return &KupmiosProvider{
-		ogmigoClient: ogmiosClient,
-		kugoClient:   kugoClient,
-		networkId:    config.NetworkId,
+		ogmigoClient:   ogmiosClient,
+		kugoClient:     kugoClient,
+		ogmiosEndpoint: config.OgmigoEndpoint,
+		networkId:      config.NetworkId,
 	}, nil
 }
 
@@ -471,10 +473,10 @@ func (kp *KupmiosProvider) GetDelegation(
 		)
 	}
 
-	ogmigoDelegation, err := kp.ogmigoClient.GetDelegation(ctx, addrStr)
+	ogmigoDelegation, err := kp.getDelegation(ctx, addrStr)
 	if err != nil {
 		return connector.Delegation{}, fmt.Errorf(
-			"kupmios: Ogmigo GetDelegation failed for %s: %w",
+			"kupmios: delegation lookup failed for %s: %w",
 			addrStr,
 			err,
 		)
@@ -549,6 +551,119 @@ func (kp *KupmiosProvider) GetDatum(
 		)
 	}
 	return pd, nil
+}
+
+type ogmiosRewardAccountSummary struct {
+	Delegate *struct {
+		ID string `json:"id"`
+	} `json:"delegate,omitempty"`
+	StakePool *struct {
+		ID string `json:"id"`
+	} `json:"stakePool,omitempty"`
+	Rewards *shared.Value `json:"rewards,omitempty"`
+}
+
+func (kp *KupmiosProvider) getDelegation(
+	ctx context.Context,
+	addrStr string,
+) (ogmigo.Delegation, error) {
+	delegation, err := kp.ogmigoClient.GetDelegation(ctx, addrStr)
+	if err == nil {
+		return delegation, nil
+	}
+	if !strings.Contains(
+		err.Error(),
+		"cannot unmarshal array into Go struct field .Result of type map[string]*ogmigo.rewardAccountSummary",
+	) {
+		return ogmigo.Delegation{}, err
+	}
+
+	summaries, queryErr := kp.queryRewardAccountSummaries(ctx, addrStr)
+	if queryErr != nil {
+		return ogmigo.Delegation{}, queryErr
+	}
+	if len(summaries) == 0 {
+		return ogmigo.Delegation{Rewards: num.Int64(0)}, nil
+	}
+
+	summary := summaries[0]
+	delegation = ogmigo.Delegation{Rewards: num.Int64(0)}
+	if summary.StakePool != nil && summary.StakePool.ID != "" {
+		delegation.PoolID = summary.StakePool.ID
+	} else if summary.Delegate != nil && summary.Delegate.ID != "" {
+		delegation.PoolID = summary.Delegate.ID
+	}
+	if summary.Rewards != nil {
+		delegation.Rewards = summary.Rewards.AdaLovelace()
+	}
+	return delegation, nil
+}
+
+func (kp *KupmiosProvider) queryRewardAccountSummaries(
+	ctx context.Context,
+	addrStr string,
+) ([]ogmiosRewardAccountSummary, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(
+		ctx,
+		kp.ogmiosEndpoint,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Ogmios: %w", err)
+	}
+	defer conn.Close()
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "queryLedgerState/rewardAccountSummaries",
+		"params": map[string]any{
+			"keys": []string{addrStr},
+		},
+		"id": nil,
+	}
+	if err := conn.WriteJSON(payload); err != nil {
+		return nil, fmt.Errorf("failed to submit Ogmios delegation query: %w", err)
+	}
+
+	var raw json.RawMessage
+	if err := conn.ReadJSON(&raw); err != nil {
+		return nil, fmt.Errorf("failed to read Ogmios delegation response: %w", err)
+	}
+
+	var response struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("failed to decode Ogmios delegation envelope: %w", err)
+	}
+	if response.Error != nil {
+		return nil, fmt.Errorf("Ogmios delegation query failed: %s", response.Error.Message)
+	}
+
+	var asArray []ogmiosRewardAccountSummary
+	if err := json.Unmarshal(response.Result, &asArray); err == nil {
+		return asArray, nil
+	}
+
+	var asMap map[string]*ogmiosRewardAccountSummary
+	if err := json.Unmarshal(response.Result, &asMap); err != nil {
+		return nil, fmt.Errorf(
+			"failed to decode Ogmios delegation summaries: %w",
+			err,
+		)
+	}
+
+	summaries := make([]ogmiosRewardAccountSummary, 0, len(asMap))
+	for _, summary := range asMap {
+		if summary == nil {
+			continue
+		}
+		summaries = append(summaries, *summary)
+	}
+	return summaries, nil
 }
 
 func (kp *KupmiosProvider) AwaitTx(
