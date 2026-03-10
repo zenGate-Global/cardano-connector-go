@@ -62,7 +62,14 @@ The `plutigo` package adds a `connector.Provider` wrapper for local transaction 
 Example:
 
 ```go
-resolver := kupmios.NewKupmiosChainContext(...)
+resolver, err := kupmios.New(kupmios.Config{
+    OgmigoEndpoint: "wss://ogmios.example",
+    KupoEndpoint:   "https://kupo.example",
+    NetworkId:      0,
+})
+if err != nil {
+    panic(err)
+}
 
 localEval, err := plutigo.Wrap(resolver)
 if err != nil {
