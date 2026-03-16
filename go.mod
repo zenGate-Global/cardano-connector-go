@@ -9,11 +9,12 @@ require (
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.1.0
 	github.com/blinklabs-io/gouroboros v0.160.0
 	github.com/blinklabs-io/plutigo v0.0.26
+	github.com/gorilla/websocket v1.5.3
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.18.1
-	github.com/utxorpc/go-sdk v0.0.1
+	github.com/utxorpc/go-sdk v0.0.3
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
@@ -42,7 +42,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
