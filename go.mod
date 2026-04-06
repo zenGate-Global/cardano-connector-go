@@ -3,17 +3,18 @@ module github.com/zenGate-Global/cardano-connector-go
 go 1.24.0
 
 require (
-	github.com/Salvionied/apollo v1.1.1
+	github.com/Salvionied/apollo v1.7.0
 	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.0
-	github.com/SundaeSwap-finance/ogmigo/v6 v6.1.0
+	github.com/SundaeSwap-finance/ogmigo/v6 v6.2.0
 	github.com/blinklabs-io/gouroboros v0.160.0
 	github.com/blinklabs-io/plutigo v0.0.26
+	github.com/gorilla/websocket v1.5.3
 	github.com/maestro-org/go-sdk v1.2.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.18.1
-	github.com/utxorpc/go-sdk v0.0.1
+	github.com/utxorpc/go-sdk v0.0.2
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
