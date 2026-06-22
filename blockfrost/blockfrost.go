@@ -681,6 +681,165 @@ func (b *BlockfrostProvider) doCustomSubmit(
 	return nil
 }
 
+// Cardano script_ref inner CBOR is [ script_type, script_bytes ] where
+// script_type: 0 = native, 1 = PlutusV1, 2 = PlutusV2, 3 = PlutusV3.
+const (
+	scriptTypeNative   = 0
+	scriptTypePlutusV1 = 1
+	scriptTypePlutusV2 = 2
+	scriptTypePlutusV3 = 3
+)
+
+// decodeScriptRef decodes apollo's PlutusData.ScriptRef into the script
+// language type and the RAW (un-tagged) serialised Plutus script bytes.
+//
+// apollo stores ScriptRef as the inner CBOR content of the script_ref wire
+// format (the bytes wrapped by CBOR tag 24, i.e. #6.24(bytes)); the tag-24
+// wrapper is only applied/stripped in ScriptRef.MarshalCBOR/UnmarshalCBOR.
+// That inner content is itself CBOR `[ script_type, script_bytes ]`, so we
+// decode it directly here.
+func decodeScriptRef(
+	scriptRef *PlutusData.ScriptRef,
+) (scriptType int, rawScript []byte, err error) {
+	if scriptRef == nil {
+		return 0, nil, errors.New("nil script ref")
+	}
+
+	// Decode the script type first and keep the script payload raw: only
+	// Plutus scripts carry a CBOR bytestring payload, whereas native scripts
+	// (type 0) carry a script array. Decoding the payload as a bytestring
+	// unconditionally would make a real native ref fail with a low-level CBOR
+	// type error instead of the caller's clear "unsupported" error.
+	var decoded struct {
+		_          struct{} `cbor:",toarray"`
+		ScriptType int
+		Script     cbor.RawMessage
+	}
+	if err := cbor.Unmarshal([]byte(*scriptRef), &decoded); err != nil {
+		return 0, nil, fmt.Errorf(
+			"failed to decode script ref CBOR: %w",
+			err,
+		)
+	}
+
+	switch decoded.ScriptType {
+	case scriptTypePlutusV1, scriptTypePlutusV2, scriptTypePlutusV3:
+		if err := cbor.Unmarshal(decoded.Script, &rawScript); err != nil {
+			return 0, nil, fmt.Errorf(
+				"failed to decode plutus script bytes: %w",
+				err,
+			)
+		}
+		return decoded.ScriptType, rawScript, nil
+	default:
+		// Native (type 0) or unknown: return the type with no bytes so the
+		// caller can emit a clear unsupported-script error.
+		return decoded.ScriptType, nil, nil
+	}
+}
+
+// buildAdditionalUtxoItem builds a single [txIn, txOut] additional-UTxO pair
+// for the Blockfrost (Ogmios v5) tx-evaluation endpoint.
+func buildAdditionalUtxoItem(
+	utxo UTxO.UTxO,
+) (bfAdditionalUtxoItem, error) {
+	txIn := bfTxIn{
+		TxId:  hex.EncodeToString(utxo.Input.TransactionId),
+		Index: utxo.Input.Index,
+	}
+
+	currentUtxoAmount := utxo.Output.GetAmount()
+	bfVal := bfValue{
+		Coins: currentUtxoAmount.GetCoin(),
+	}
+
+	if currentUtxoAmount.HasAssets {
+		assets := make(map[string]int64)
+		for policyId, assetMap := range currentUtxoAmount.Am.Value {
+			for assetName, quantity := range assetMap {
+				assetNameHex := assetName.HexString()
+				var unit string
+				if assetNameHex == "" {
+					unit = policyId.Value
+				} else {
+					unit = policyId.Value + "." + assetNameHex
+				}
+				assets[unit] = quantity
+			}
+		}
+		if len(assets) > 0 {
+			bfVal.Assets = assets
+		}
+	}
+
+	txOut := bfTxOut{
+		Address: utxo.Output.GetAddress().String(),
+		Value:   bfVal,
+	}
+
+	// Datum: pre-Alonzo outputs carry only a datum hash; post-Alonzo (Babbage)
+	// outputs carry either an inline datum or a datum hash. datum and datumHash
+	// are mutually exclusive.
+	if utxo.Output.IsPostAlonzo {
+		if d := utxo.Output.PostAlonzo.Datum; d != nil {
+			switch d.DatumType {
+			case PlutusData.DatumTypeInline:
+				if inlineDatum := utxo.Output.GetDatum(); inlineDatum != nil {
+					datumCbor, err := cbor.Marshal(inlineDatum)
+					if err != nil {
+						return bfAdditionalUtxoItem{}, fmt.Errorf(
+							"failed to encode inline datum in additional UTxO set: %w",
+							err,
+						)
+					}
+					datumHex := hex.EncodeToString(datumCbor)
+					txOut.Datum = &datumHex
+				}
+			case PlutusData.DatumTypeHash:
+				if len(d.Hash) > 0 {
+					datumHashHex := hex.EncodeToString(d.Hash)
+					txOut.DatumHash = &datumHashHex
+				}
+			}
+		}
+	} else if datumHash := utxo.Output.GetDatumHash(); datumHash != nil &&
+		len(datumHash.Payload) > 0 {
+		datumHashHex := hex.EncodeToString(datumHash.Payload)
+		txOut.DatumHash = &datumHashHex
+	}
+
+	if scriptRef := utxo.Output.GetScriptRef(); scriptRef != nil {
+		scriptType, rawScript, err := decodeScriptRef(scriptRef)
+		if err != nil {
+			return bfAdditionalUtxoItem{}, fmt.Errorf(
+				"failed to decode script ref in additional UTxO set: %w",
+				err,
+			)
+		}
+
+		rawScriptHex := hex.EncodeToString(rawScript)
+		switch scriptType {
+		case scriptTypePlutusV1:
+			txOut.ScriptRef = &bfScriptRef{PlutusV1: &rawScriptHex}
+		case scriptTypePlutusV2:
+			txOut.ScriptRef = &bfScriptRef{PlutusV2: &rawScriptHex}
+		case scriptTypePlutusV3:
+			txOut.ScriptRef = &bfScriptRef{PlutusV3: &rawScriptHex}
+		case scriptTypeNative:
+			return bfAdditionalUtxoItem{}, errors.New(
+				"unsupported script type in additional UTxO set: native scripts are not supported by the Ogmios v5 evaluation endpoint",
+			)
+		default:
+			return bfAdditionalUtxoItem{}, fmt.Errorf(
+				"unsupported script type in additional UTxO set: unknown script type %d",
+				scriptType,
+			)
+		}
+	}
+
+	return bfAdditionalUtxoItem{txIn, txOut}, nil
+}
+
 // EvaluateTx evaluates a transaction's scripts.
 func (b *BlockfrostProvider) EvaluateTx(
 	ctx context.Context,
@@ -689,73 +848,11 @@ func (b *BlockfrostProvider) EvaluateTx(
 ) (map[string]Redeemer.ExecutionUnits, error) {
 	additionalBfUtxos := make([]bfAdditionalUtxoItem, 0, len(additionalUTxOs))
 	for _, utxo := range additionalUTxOs {
-
-		txIn := bfTxIn{
-			TxId:  hex.EncodeToString(utxo.Input.TransactionId),
-			Index: utxo.Input.Index,
+		item, err := buildAdditionalUtxoItem(utxo)
+		if err != nil {
+			return nil, err
 		}
-
-		currentUtxoAmount := utxo.Output.GetAmount()
-		bfVal := bfValue{
-			Coins: currentUtxoAmount.GetCoin(),
-		}
-
-		if currentUtxoAmount.HasAssets {
-			assets := make(map[string]int64)
-			for policyId, assetMap := range currentUtxoAmount.Am.Value {
-				for assetName, quantity := range assetMap {
-					assetNameHex := assetName.HexString()
-					var unit string
-					if assetNameHex == "" {
-						unit = policyId.Value
-					} else {
-						unit = policyId.Value + "." + assetNameHex
-					}
-					assets[unit] = quantity
-				}
-			}
-			if len(assets) > 0 {
-				bfVal.Assets = assets
-			}
-		}
-
-		txOut := bfTxOut{
-			Address: utxo.Output.GetAddress().String(),
-			Value:   bfVal,
-		}
-
-		if datumHash := utxo.Output.GetDatumHash(); datumHash != nil &&
-			datumHash.Payload != nil &&
-			len(datumHash.Payload) > 0 {
-			datumHashHex := hex.EncodeToString(datumHash.Payload)
-			txOut.DatumHash = &datumHashHex
-		}
-
-		if utxo.Output.IsPostAlonzo && utxo.Output.PostAlonzo.Datum != nil {
-			if inlineDatum := utxo.Output.GetDatum(); inlineDatum != nil {
-				datumCbor, err := cbor.Marshal(inlineDatum)
-				if err == nil {
-					datumHex := hex.EncodeToString(datumCbor)
-					txOut.Datum = &datumHex
-				}
-			}
-		}
-
-		if scriptRef := utxo.Output.GetScriptRef(); scriptRef != nil {
-			scriptCbor, err := cbor.Marshal(scriptRef)
-			if err == nil {
-				scriptHex := hex.EncodeToString(scriptCbor)
-				// TODO dyanmically choose v1, v2, or v3
-				txOut.ScriptRef = &bfScriptRef{
-					PlutusV3: &scriptHex,
-				}
-			}
-		}
-
-		additionalBfUtxos = append(
-			additionalBfUtxos,
-			bfAdditionalUtxoItem{txIn, txOut},
-		)
+		additionalBfUtxos = append(additionalBfUtxos, item)
 	}
 
 	evalReq := bfEvalRequest{
