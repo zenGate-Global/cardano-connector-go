@@ -826,7 +826,7 @@ func buildAdditionalUtxoItem(
 		case scriptTypePlutusV3:
 			txOut.ScriptRef = &bfScriptRef{PlutusV3: &rawScriptHex}
 		case scriptTypeNative:
-			return bfAdditionalUtxoItem{}, fmt.Errorf(
+			return bfAdditionalUtxoItem{}, errors.New(
 				"unsupported script type in additional UTxO set: native scripts are not supported by the Ogmios v5 evaluation endpoint",
 			)
 		default:
