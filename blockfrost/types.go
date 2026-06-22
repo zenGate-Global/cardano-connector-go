@@ -41,7 +41,7 @@ type bfScriptRef struct {
 type bfTxOut struct {
 	Address   string       `json:"address"`
 	Value     bfValue      `json:"value"` // Changed from Amount to Value
-	DatumHash *string      `json:"datum_hash,omitempty"`
+	DatumHash *string      `json:"datumHash,omitempty"`
 	Datum     *string      `json:"datum,omitempty"`
 	ScriptRef *bfScriptRef `json:"script,omitempty"`
 }
