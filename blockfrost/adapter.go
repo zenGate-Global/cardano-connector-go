@@ -384,8 +384,8 @@ func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
 	}
 
 	return Base.ProtocolParameters{
-		MinFeeConstant:                   p.MinFeeConstant,
-		MinFeeCoefficient:                p.MinFeeCoefficient,
+		MinFeeConstant:                   int64(p.MinFeeConstant),
+		MinFeeCoefficient:                int64(p.MinFeeCoefficient),
 		MaxBlockSize:                     p.MaxBlockSize,
 		MaxTxSize:                        p.MaxTxSize,
 		MaxBlockHeaderSize:               p.MaxBlockHeaderSize,
@@ -411,7 +411,7 @@ func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
 		MaxCollateralInuts:               p.MaxCollateralInuts,
 		CoinsPerUtxoWord:                 p.CoinsPerUtxoWord,
 		CoinsPerUtxoByte:                 p.CoinsPerUtxoByte,
-		CostModels:                       costModels,
+		CostModelsRaw:                    costModels,
 		MaximumReferenceScriptsSize:      p.MaximumReferenceScriptsSize,
 		MinFeeReferenceScriptsRange:      p.MinFeeReferenceScriptsRange,
 		MinFeeReferenceScriptsBase:       p.MinFeeReferenceScriptsBase,

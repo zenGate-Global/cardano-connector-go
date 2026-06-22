@@ -71,8 +71,8 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 	cardanoParams := paramsResponse.Msg.GetValues().GetCardano()
 
 	pp := Base.ProtocolParameters{
-		MinFeeConstant:     int(bigIntToInt64(cardanoParams.GetMinFeeConstant())),
-		MinFeeCoefficient:  int(bigIntToInt64(cardanoParams.GetMinFeeCoefficient())),
+		MinFeeConstant:     bigIntToInt64(cardanoParams.GetMinFeeConstant()),
+		MinFeeCoefficient:  bigIntToInt64(cardanoParams.GetMinFeeCoefficient()),
 		MaxTxSize:          int(cardanoParams.GetMaxTxSize()),
 		MaxBlockSize:       int(cardanoParams.GetMaxBlockBodySize()),
 		MaxBlockHeaderSize: int(cardanoParams.GetMaxBlockHeaderSize()),
@@ -126,7 +126,7 @@ func (u *UtxorpcProvider) GetProtocolParameters(
 			10,
 		),
 		CoinsPerUtxoWord: "0",
-		CostModels: map[string][]int64{
+		CostModelsRaw: map[string][]int64{
 			"PlutusV1": cardanoParams.GetCostModels().GetPlutusV1().GetValues(),
 			"PlutusV2": cardanoParams.GetCostModels().GetPlutusV2().GetValues(),
 			"PlutusV3": cardanoParams.GetCostModels().GetPlutusV3().GetValues(),

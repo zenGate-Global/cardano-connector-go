@@ -57,7 +57,7 @@ func TestGetProtocolParameters(t *testing.T) {
 	if pp.MaxTxSize == 0 {
 		t.Error("Expected non-zero MaxTxSize")
 	}
-	if len(pp.CostModels["PlutusV2"]) == 0 {
+	if len(pp.CostModelsRaw["PlutusV2"]) == 0 {
 		t.Error("Expected non-empty PlutusV2 cost model")
 	}
 	if pp.MinUtxo == "" {
@@ -151,7 +151,7 @@ func TestNewUsesProtocolParamsOverride(t *testing.T) {
 		MinFeeConstant:                   123,
 		CoinsPerUtxoWord:                 "456",
 		MinFeeReferenceScriptsMultiplier: 789,
-		CostModels: map[string][]int64{
+		CostModelsRaw: map[string][]int64{
 			"PlutusV2": []int64{1, 2, 3},
 		},
 	}
