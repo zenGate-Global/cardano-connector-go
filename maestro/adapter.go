@@ -37,10 +37,10 @@ func adaptMaestroProtocolParams(
 	protocolParams := Base.ProtocolParameters{}
 
 	// Map ALL the fields
-	protocolParams.MinFeeConstant = int(
+	protocolParams.MinFeeConstant = int64(
 		p.MinFeeConstant.LovelaceAmount.Lovelace,
 	)
-	protocolParams.MinFeeCoefficient = int(p.MinFeeCoefficient)
+	protocolParams.MinFeeCoefficient = int64(p.MinFeeCoefficient)
 	protocolParams.MaxTxSize = int(p.MaxTransactionSize.Bytes)
 	protocolParams.MaxBlockSize = int(p.MaxBlockBodySize.Bytes)
 	protocolParams.MaxBlockHeaderSize = int(p.MaxBlockHeaderSize.Bytes)
@@ -97,7 +97,7 @@ func adaptMaestroProtocolParams(
 	if err != nil {
 		return Base.ProtocolParameters{}, err
 	}
-	protocolParams.CostModels = costModels
+	protocolParams.CostModelsRaw = costModels
 	protocolParams.MaximumReferenceScriptsSize = 0
 	protocolParams.MinFeeReferenceScriptsRange = 0
 	protocolParams.MinFeeReferenceScriptsBase = 0

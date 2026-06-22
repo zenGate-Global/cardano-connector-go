@@ -1,9 +1,9 @@
 module github.com/zenGate-Global/cardano-connector-go
 
-go 1.25.7
+go 1.25.8
 
 require (
-	github.com/Salvionied/apollo v1.1.1
+	github.com/Salvionied/apollo v1.8.2
 	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.1
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.2.1

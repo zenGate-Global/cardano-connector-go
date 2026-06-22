@@ -690,7 +690,7 @@ func buildEvalContext(
 	params Base.ProtocolParameters,
 	version scriptVersion,
 ) (*cek.EvalContext, error) {
-	costModel, err := costModelForVersion(params.CostModels, version)
+	costModel, err := costModelForVersion(params.CostModelsRaw, version)
 	if err != nil {
 		return nil, err
 	}

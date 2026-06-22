@@ -249,8 +249,8 @@ func adaptOgmigoProtocolParamsToConnectorParams(
 	ogmiosParams OgmiosProtocolParameters,
 ) Base.ProtocolParameters {
 	return Base.ProtocolParameters{
-		MinFeeConstant:     int(ogmiosParams.MinFeeConstant.Ada.Lovelace),
-		MinFeeCoefficient:  int(ogmiosParams.MinFeeCoefficient),
+		MinFeeConstant:     int64(ogmiosParams.MinFeeConstant.Ada.Lovelace),
+		MinFeeCoefficient:  int64(ogmiosParams.MinFeeCoefficient),
 		MaxBlockSize:       int(ogmiosParams.MaxBlockBodySize.Bytes),
 		MaxTxSize:          int(ogmiosParams.MaxTransactionSize.Bytes),
 		MaxBlockHeaderSize: int(ogmiosParams.MaxBlockHeaderSize.Bytes),
@@ -324,7 +324,7 @@ func adaptOgmigoProtocolParamsToConnectorParams(
 		MinFeeReferenceScriptsMultiplier: int(
 			ogmiosParams.MinFeeReferenceScripts.Multiplier,
 		),
-		CostModels: ogmiosParams.PlutusCostModels,
+		CostModelsRaw: ogmiosParams.PlutusCostModels,
 	}
 }
 
