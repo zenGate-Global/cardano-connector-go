@@ -129,7 +129,13 @@ func adaptBlockfrostAddressUTxOs(
 				if err != nil {
 					continue
 				}
-				scriptRefContent := PlutusData.ScriptRef(scriptCborBytes)
+				scriptRefContent, err := scriptRefFromHash(
+					bfUtxo.ReferenceScriptHash,
+					scriptCborBytes,
+				)
+				if err != nil {
+					continue
+				}
 				txOut.PostAlonzo.ScriptRef = &scriptRefContent
 			}
 		} else {
@@ -279,7 +285,16 @@ func adaptBlockfrostTxOutputToApolloUTxO(
 					err,
 				)
 			}
-			scriptRefContent := PlutusData.ScriptRef(scriptCborBytes)
+			scriptRefContent, err := scriptRefFromHash(
+				bfOut.ReferenceScriptHash,
+				scriptCborBytes,
+			)
+			if err != nil {
+				return UTxO.UTxO{}, fmt.Errorf(
+					"failed to build reference script ref: %w",
+					err,
+				)
+			}
 			output.PostAlonzo.ScriptRef = &scriptRefContent
 		}
 	} else {
@@ -417,4 +432,49 @@ func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
 		MinFeeReferenceScriptsBase:       p.MinFeeReferenceScriptsBase,
 		MinFeeReferenceScriptsMultiplier: p.MinFeeReferenceScriptsMultiplier,
 	}
+}
+
+// scriptRefFromHash builds a typed apollo ScriptRef from a reference script's
+// CBOR by detecting its Plutus language version. It hashes the script as each
+// Plutus version and matches against the known reference script hash, which both
+// determines the language and validates the bytes. Native (timelock) scripts and
+// any script whose language cannot be determined fall back to the raw CBOR,
+// preserving prior behavior (apollo has no native ScriptRef constructor, and
+// native reference scripts are not used by the evaluation path).
+func scriptRefFromHash(
+	scriptHashHex string,
+	scriptCbor []byte,
+) (PlutusData.ScriptRef, error) {
+	hashBytes, err := hex.DecodeString(scriptHashHex)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"invalid reference script hash %q: %w",
+			scriptHashHex,
+			err,
+		)
+	}
+	var want serialization.ScriptHash
+	if len(hashBytes) != len(want) {
+		return nil, fmt.Errorf(
+			"invalid reference script hash length: expected %d bytes, got %d",
+			len(want),
+			len(hashBytes),
+		)
+	}
+	copy(want[:], hashBytes)
+
+	matches := func(h serialization.ScriptHash, err error) bool {
+		return err == nil && h == want
+	}
+
+	if v1 := PlutusData.PlutusV1Script(scriptCbor); matches(v1.Hash()) {
+		return PlutusData.NewV1ScriptRef(v1)
+	}
+	if v2 := PlutusData.PlutusV2Script(scriptCbor); matches(v2.Hash()) {
+		return PlutusData.NewV2ScriptRef(v2)
+	}
+	if v3 := PlutusData.PlutusV3Script(scriptCbor); matches(v3.Hash()) {
+		return PlutusData.NewV3ScriptRef(v3)
+	}
+	return PlutusData.ScriptRef(scriptCbor), nil
 }
