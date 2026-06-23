@@ -566,11 +566,56 @@ func (p *PlutigoProvider) resolveSlotState(ctx context.Context) (localSlotState,
 		)
 	}
 
+	// BlockFrost (and Ogmios genesis) report the *Byron* system start and a
+	// 1-second Shelley slot length. On networks with a Byron era (mainnet,
+	// preprod) the Byron era used 20-second slots, so an absolute slot number
+	// does NOT map linearly from the Byron genesis at 1s granularity: anchoring
+	// at (zeroSlot=0, zeroTime=ByronStart, slotLength=1s) shifts every converted
+	// time by the accumulated Byron offset (~18.5 days on preprod). Plutus
+	// validity-range bounds are derived from this conversion, so a script that
+	// compares the validity lower bound against a POSIX timestamp (e.g. an
+	// unlock time) then fails silently.
+	//
+	// The correct Plutus time anchor is the Shelley era boundary. The public
+	// Cardano networks are recognised by their well-known Byron system start, so
+	// map the reported start to the corresponding Shelley anchor (zeroSlot,
+	// zeroTime). Networks whose Byron start is not recognised (preview, private
+	// or custom networks) fall back to the legacy (genesis-derived) anchor,
+	// which is correct for Byron-less networks such as preview.
+	if anchor, ok := shelleySlotAnchor(int64(genesis.SystemStart)); ok {
+		return localSlotState{
+			zeroTime:   time.Unix(anchor.zeroTimeUnix, 0).UTC(),
+			zeroSlot:   anchor.zeroSlot,
+			slotLength: time.Duration(genesis.SlotLength) * time.Second,
+		}, nil
+	}
+
 	return localSlotState{
 		zeroTime:   time.Unix(int64(genesis.SystemStart), 0).UTC(),
 		zeroSlot:   0,
 		slotLength: time.Duration(genesis.SlotLength) * time.Second,
 	}, nil
+}
+
+type shelleyAnchor struct {
+	zeroSlot     uint64
+	zeroTimeUnix int64
+}
+
+// shelleySlotAnchor maps a network's Byron genesis system-start (as reported by
+// BlockFrost/Ogmios) to the absolute-slot/Unix-time anchor at which 1-second
+// Shelley slots begin. These are the canonical values used by off-chain
+// tooling (Lucid, Mesh, Ogmios) for slot<->time conversion. Returns ok=false
+// for networks that need no era adjustment (e.g. preview) or are unknown.
+func shelleySlotAnchor(byronSystemStartUnix int64) (shelleyAnchor, bool) {
+	switch byronSystemStartUnix {
+	case 1506203091: // mainnet Byron start; Shelley began at slot 4492800.
+		return shelleyAnchor{zeroSlot: 4492800, zeroTimeUnix: 1596059091}, true
+	case 1654041600: // preprod Byron start; Shelley began at slot 86400 / 1655769600.
+		return shelleyAnchor{zeroSlot: 86400, zeroTimeUnix: 1655769600}, true
+	default:
+		return shelleyAnchor{}, false
+	}
 }
 
 func (p *PlutigoProvider) resolveScript(
