@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/big"
 	"strconv"
@@ -117,29 +118,32 @@ func matchToUtxo(
 	// script hash, not the resolved script bytes, so when a script hash is
 	// present we resolve the script via /v1/scripts/{hash}. The resolved bytes
 	// are verified against the claimed hash by kupoScriptToScriptRef.
+	//
+	// Chain-read hydration is best-effort: if the script cannot be resolved
+	// (empty/invalid body, transient failure) or parsed, do NOT abort the whole
+	// fetch; keep the UTxO with an unresolved (nil) reference script.
 	script := match.Script
 	if script.Script == "" && match.ScriptHash != "" {
 		fetched, err := fetcher.Script(ctx, match.ScriptHash)
 		if err != nil {
-			return common.Utxo{}, fmt.Errorf(
-				"failed to resolve reference script %s: %w",
-				match.ScriptHash,
-				err,
-			)
-		}
-		if fetched != nil {
+			slog.Warn("kupmios: leaving reference script unresolved during hydration",
+				"script_hash", match.ScriptHash,
+				"utxo", fmt.Sprintf("%s#%d", match.TransactionID, match.OutputIndex),
+				"err", err)
+		} else if fetched != nil {
 			script = *fetched
 		}
 	}
 	if script.Script != "" {
 		ref, err := kupoScriptToScriptRef(script, match.ScriptHash)
 		if err != nil {
-			return common.Utxo{}, fmt.Errorf(
-				"failed to parse script ref: %w",
-				err,
-			)
+			slog.Warn("kupmios: leaving reference script unresolved during hydration (parse failed)",
+				"script_hash", match.ScriptHash,
+				"utxo", fmt.Sprintf("%s#%d", match.TransactionID, match.OutputIndex),
+				"err", err)
+		} else {
+			output.TxOutScriptRef = ref
 		}
-		output.TxOutScriptRef = ref
 	}
 
 	return utxo, nil
@@ -262,16 +266,16 @@ func ogmiosUtxoToCommon(
 		output.DatumOption = opt
 	}
 
-	// Set script reference from ogmios UTxO data.
+	// Set script reference from ogmios UTxO data. Chain-read hydration is
+	// best-effort: a malformed reference script must not abort the fetch; keep
+	// the UTxO with an unresolved (nil) reference script.
 	if len(raw.Script) > 0 && string(raw.Script) != "null" {
 		ref, err := ogmiosScriptToScriptRef(raw.Script)
 		if err != nil {
-			return common.Utxo{}, fmt.Errorf(
-				"failed to parse script ref: %w",
-				err,
-			)
-		}
-		if ref != nil {
+			slog.Warn("kupmios: leaving reference script unresolved during hydration (ogmios script parse failed)",
+				"utxo", fmt.Sprintf("%s#%d", raw.Transaction.ID, raw.Index),
+				"err", err)
+		} else if ref != nil {
 			output.TxOutScriptRef = ref
 		}
 	}

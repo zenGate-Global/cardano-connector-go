@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -469,9 +470,18 @@ func (b *BlockfrostProvider) hydrateUtxo(
 	if raw.ReferenceScriptHash != "" {
 		scriptRef, err := b.scriptRefByHash(ctx, raw.ReferenceScriptHash)
 		if err != nil {
-			return common.Utxo{}, fmt.Errorf("failed to resolve reference script %s: %w", raw.ReferenceScriptHash, err)
+			// Chain-read hydration is best-effort: a reference script that
+			// cannot be resolved (empty CBOR, native scripts served only at
+			// /scripts/{hash}/json, parse error, transient failure) must NOT
+			// abort the whole UTxO fetch. Keep the UTxO with an unresolved
+			// (nil) reference script.
+			slog.Warn("blockfrost: leaving reference script unresolved during hydration",
+				"script_hash", raw.ReferenceScriptHash,
+				"utxo", fmt.Sprintf("%s#%d", raw.TxHash, raw.OutputIndex),
+				"err", err)
+		} else {
+			output.TxOutScriptRef = scriptRef
 		}
-		output.TxOutScriptRef = scriptRef
 	}
 	return utxo, nil
 }
