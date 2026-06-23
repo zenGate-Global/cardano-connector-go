@@ -1,10 +1,8 @@
 module github.com/zenGate-Global/cardano-connector-go
 
-go 1.25.8
+go 1.25.10
 
 require (
-	github.com/Salvionied/apollo v1.8.2
-	github.com/Salvionied/cbor/v2 v2.6.0
 	github.com/SundaeSwap-finance/kugo v1.3.1
 	github.com/SundaeSwap-finance/ogmigo/v6 v6.2.1
 	github.com/blinklabs-io/gouroboros v0.183.0
@@ -18,9 +16,10 @@ require (
 )
 
 require (
-	connectrpc.com/connect v1.20.0 // indirect
+	connectrpc.com/connect v1.20.0
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
+	github.com/Salvionied/apollo/v2 v2.0.0
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.5.0 // indirect
@@ -43,7 +42,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
@@ -58,3 +57,5 @@ require (
 // replace github.com/utxorpc/go-sdk => github.com/mgpai22/go-sdk v0.0.3
 
 replace github.com/maestro-org/go-sdk => github.com/mgpai22/maestro-cardano-go-sdk v0.0.0-20260309092003-ccf2793f8d4d
+
+replace github.com/Salvionied/apollo/v2 => github.com/zenGate-Global/apollo/v2 v2.0.0-20260622225749-35b99c93f76c

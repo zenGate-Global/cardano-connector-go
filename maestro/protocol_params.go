@@ -4,21 +4,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/Salvionied/apollo/v2/backend"
 )
 
 // These scalar defaults were fetched from Blockfrost /epochs/latest/parameters
-// for mainnet, preprod, and preview on 2026-03-10. Maestro still supplies live
-// protocol parameters and cost models; this preset only fills fields Maestro's
-// SDK does not expose in Base.ProtocolParameters' older shape.
-var protocolParamsPresetsByNetwork = map[string]Base.ProtocolParameters{
+// for mainnet, preprod, and preview on 2026-03-10. Maestro supplies live
+// protocol parameters and cost models, which adaptMaestroProtocolParams now
+// maps in full (including protocol major/minor version, monetary/treasury
+// expansion, and pool pledge influence). This preset only fills the remaining
+// fields that the Maestro SDK's ProtocolParams genuinely does not expose:
+// MinUtxo, CoinsPerUtxoWord, DecentralizationParam, ExtraEntropy,
+// MaximumReferenceScriptsSize, and the MinFeeReferenceScripts* trio. mergeMaestroProtocolParams
+// only substitutes a preset value when the corresponding live field is
+// zero/empty, so live data always wins.
+var protocolParamsPresetsByNetwork = map[string]backend.ProtocolParameters{
 	"mainnet": newProtocolParamsPreset(),
 	"preprod": newProtocolParamsPreset(),
 	"preview": newProtocolParamsPreset(),
 }
 
-func newProtocolParamsPreset() Base.ProtocolParameters {
-	return Base.ProtocolParameters{
+func newProtocolParamsPreset() backend.ProtocolParameters {
+	return backend.ProtocolParameters{
 		MinFeeConstant:                   155381,
 		MinFeeCoefficient:                44,
 		MaxBlockSize:                     90112,
@@ -26,7 +32,7 @@ func newProtocolParamsPreset() Base.ProtocolParameters {
 		MaxBlockHeaderSize:               1100,
 		KeyDeposits:                      "2000000",
 		PoolDeposits:                     "500000000",
-		PooolInfluence:                   0.3,
+		PoolInfluence:                    0.3,
 		MonetaryExpansion:                0.003,
 		TreasuryExpansion:                0.2,
 		DecentralizationParam:            0,
@@ -43,7 +49,7 @@ func newProtocolParamsPreset() Base.ProtocolParameters {
 		MaxBlockExSteps:                  "20000000000",
 		MaxValSize:                       "5000",
 		CollateralPercent:                150,
-		MaxCollateralInuts:               3,
+		MaxCollateralInputs:              3,
 		CoinsPerUtxoWord:                 "4310",
 		CoinsPerUtxoByte:                 "4310",
 		MaximumReferenceScriptsSize:      0,
@@ -53,10 +59,10 @@ func newProtocolParamsPreset() Base.ProtocolParameters {
 	}
 }
 
-func resolveProtocolParamsPreset(networkName string) (Base.ProtocolParameters, error) {
+func resolveProtocolParamsPreset(networkName string) (backend.ProtocolParameters, error) {
 	preset, ok := protocolParamsPresetsByNetwork[strings.ToLower(networkName)]
 	if !ok {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"unsupported or missing network name: %s",
 			networkName,
 		)
@@ -65,9 +71,9 @@ func resolveProtocolParamsPreset(networkName string) (Base.ProtocolParameters, e
 }
 
 func mergeMaestroProtocolParams(
-	current Base.ProtocolParameters,
-	preset Base.ProtocolParameters,
-) Base.ProtocolParameters {
+	current backend.ProtocolParameters,
+	preset backend.ProtocolParameters,
+) backend.ProtocolParameters {
 	if current.MinFeeConstant == 0 {
 		current.MinFeeConstant = preset.MinFeeConstant
 	}
@@ -89,8 +95,8 @@ func mergeMaestroProtocolParams(
 	if current.PoolDeposits == "" {
 		current.PoolDeposits = preset.PoolDeposits
 	}
-	if current.PooolInfluence == 0 {
-		current.PooolInfluence = preset.PooolInfluence
+	if current.PoolInfluence == 0 {
+		current.PoolInfluence = preset.PoolInfluence
 	}
 	if current.MonetaryExpansion == 0 {
 		current.MonetaryExpansion = preset.MonetaryExpansion
@@ -136,8 +142,8 @@ func mergeMaestroProtocolParams(
 	if current.CollateralPercent == 0 {
 		current.CollateralPercent = preset.CollateralPercent
 	}
-	if current.MaxCollateralInuts == 0 {
-		current.MaxCollateralInuts = preset.MaxCollateralInuts
+	if current.MaxCollateralInputs == 0 {
+		current.MaxCollateralInputs = preset.MaxCollateralInputs
 	}
 	if current.CoinsPerUtxoByte == "" || current.CoinsPerUtxoByte == "0" {
 		current.CoinsPerUtxoByte = preset.CoinsPerUtxoByte

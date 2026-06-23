@@ -18,121 +18,78 @@ type Config struct {
 	NetworkId      int
 }
 
-type OgmiosScript struct {
-	Language string `json:"language"`
-	CBOR     string `json:"cbor"`
+// ogmiosProtocolParams mirrors the subset of the Ogmios
+// queryLedgerState/protocolParameters response that we map onto
+// backend.ProtocolParameters.
+type ogmiosProtocolParams struct {
+	MinFeeCoefficient  int64                  `json:"minFeeCoefficient"`
+	MinFeeConstant     ogmiosLovelace         `json:"minFeeConstant"`
+	MaxBlockBodySize   ogmiosBytes            `json:"maxBlockBodySize"`
+	MaxBlockHeaderSize ogmiosBytes            `json:"maxBlockHeaderSize"`
+	MaxTxSize          ogmiosBytes            `json:"maxTransactionSize"`
+	StakeKeyDeposit    ogmiosLovelace         `json:"stakeCredentialDeposit"`
+	PoolDeposit        ogmiosLovelace         `json:"stakePoolDeposit"`
+	MinPoolCost        ogmiosLovelace         `json:"minStakePoolCost"`
+	PoolInfluence      string                 `json:"stakePoolPledgeInfluence"`
+	MonetaryExpansion  string                 `json:"monetaryExpansion"`
+	TreasuryExpansion  string                 `json:"treasuryExpansion"`
+	CollateralPercent  int                    `json:"collateralPercentage"`
+	MaxCollateral      int                    `json:"maxCollateralInputs"`
+	MaxValSize         ogmiosBytes            `json:"maxValueSize"`
+	ScriptPrices       ogmiosPrices           `json:"scriptExecutionPrices"`
+	MaxTxExUnits       ogmiosExUnits          `json:"maxExecutionUnitsPerTransaction"`
+	MaxBlockExUnits    ogmiosExUnits          `json:"maxExecutionUnitsPerBlock"`
+	MinUtxoDeposit     int64                  `json:"minUtxoDepositCoefficient"`
+	MinUtxoConstant    ogmiosLovelace         `json:"minUtxoDepositConstant"`
+	MaxRefScriptsSize  ogmiosBytes            `json:"maxReferenceScriptsSize"`
+	MinFeeRefScripts   ogmiosMinFeeRefScripts `json:"minFeeReferenceScripts"`
+	Version            ogmiosVersion          `json:"version"`
+	CostModels         map[string][]int64     `json:"plutusCostModels"`
 }
 
-type Lovelace struct {
-	Lovelace uint64 `json:"lovelace"`
+type ogmiosLovelace struct {
+	Lovelace int64 `json:"lovelace"`
 }
 
-type AdaValue struct {
-	Ada Lovelace `json:"ada"`
+type ogmiosBytes struct {
+	Bytes int `json:"bytes"`
 }
 
-type Prices struct {
+type ogmiosPrices struct {
 	Memory string `json:"memory"`
-	Cpu    string `json:"cpu"`
+	CPU    string `json:"cpu"`
 }
 
-type Bytes struct {
-	Bytes uint64 `json:"bytes"`
+type ogmiosExUnits struct {
+	Memory int64 `json:"memory"`
+	CPU    int64 `json:"cpu"`
 }
 
-type Version struct {
-	Major uint64 `json:"major"`
-	Minor uint64 `json:"minor"`
-	Patch uint64 `json:"patch,omitempty"`
-}
-
-type MinFeeReferenceScripts struct {
-	Range      uint64  `json:"range"`
+type ogmiosMinFeeRefScripts struct {
+	Range      int     `json:"range"`
 	Base       float64 `json:"base"`
 	Multiplier float64 `json:"multiplier"`
 }
 
-type CommitteeThresholds struct {
-	Default             string `json:"default"`
-	StateOfNoConfidence string `json:"stateOfNoConfidence"`
+type ogmiosVersion struct {
+	Major int `json:"major"`
+	Minor int `json:"minor"`
 }
 
-type DRepProtocolParametersUpdateThresholds struct {
-	Economic   string `json:"economic"`
-	Governance string `json:"governance"`
-	Network    string `json:"network"`
-	Technical  string `json:"technical"`
-}
-
-type DelegateRepresentativeVotingThresholds struct {
-	Constitution             string                                 `json:"constitution"`
-	ConstitutionalCommittee  CommitteeThresholds                    `json:"constitutionalCommittee"`
-	HardForkInitiation       string                                 `json:"hardForkInitiation"`
-	NoConfidence             string                                 `json:"noConfidence"`
-	ProtocolParametersUpdate DRepProtocolParametersUpdateThresholds `json:"protocolParametersUpdate"`
-	TreasuryWithdrawals      string                                 `json:"treasuryWithdrawals"`
-}
-
-type SPProtocolParametersUpdateThresholds struct {
-	Security string `json:"security"`
-}
-
-type StakePoolVotingThresholds struct {
-	ConstitutionalCommittee  CommitteeThresholds                  `json:"constitutionalCommittee"`
-	HardForkInitiation       string                               `json:"hardForkInitiation"`
-	NoConfidence             string                               `json:"noConfidence"`
-	ProtocolParametersUpdate SPProtocolParametersUpdateThresholds `json:"protocolParametersUpdate"`
-}
-
-type OgmiosProtocolParameters struct {
-	MinFeeConstant                  AdaValue               `json:"minFeeConstant"`
-	MinFeeCoefficient               uint64                 `json:"minFeeCoefficient"`
-	MaxBlockBodySize                Bytes                  `json:"maxBlockBodySize"`
-	MaxTransactionSize              Bytes                  `json:"maxTransactionSize"`
-	MaxBlockHeaderSize              Bytes                  `json:"maxBlockHeaderSize"`
-	StakeCredentialDeposit          AdaValue               `json:"stakeCredentialDeposit"`
-	StakePoolDeposit                AdaValue               `json:"stakePoolDeposit"`
-	StakePoolPledgeInfluence        string                 `json:"stakePoolPledgeInfluence"`
-	MonetaryExpansion               string                 `json:"monetaryExpansion"`
-	TreasuryExpansion               string                 `json:"treasuryExpansion"`
-	ExtraEntropy                    *string                `json:"extraEntropy,omitempty"`
-	MaxValueSize                    Bytes                  `json:"maxValueSize"`
-	ScriptExecutionPrices           Prices                 `json:"scriptExecutionPrices"`
-	MinUtxoDepositCoefficient       uint64                 `json:"minUtxoDepositCoefficient"`
-	MinUtxoDepositConstant          AdaValue               `json:"minUtxoDepositConstant"`
-	MinStakePoolCost                AdaValue               `json:"minStakePoolCost"`
-	MaxExecutionUnitsPerTransaction ogmigo.ExUnitsBudget   `json:"maxExecutionUnitsPerTransaction"`
-	MaxExecutionUnitsPerBlock       ogmigo.ExUnitsBudget   `json:"maxExecutionUnitsPerBlock"`
-	CollateralPercentage            uint64                 `json:"collateralPercentage"`
-	MaxCollateralInputs             uint64                 `json:"maxCollateralInputs"`
-	MaxReferenceScriptsSize         Bytes                  `json:"maxReferenceScriptsSize"`
-	MinFeeReferenceScripts          MinFeeReferenceScripts `json:"minFeeReferenceScripts"`
-	Version                         Version                `json:"version"`
-	PlutusCostModels                map[string][]int64     `json:"plutusCostModels"`
-
-	ConstitutionalCommitteeMaxTermLength   uint64                                 `json:"constitutionalCommitteeMaxTermLength"`
-	ConstitutionalCommitteeMinSize         uint64                                 `json:"constitutionalCommitteeMinSize"`
-	DelegateRepresentativeDeposit          AdaValue                               `json:"delegateRepresentativeDeposit"`
-	DelegateRepresentativeMaxIdleTime      uint64                                 `json:"delegateRepresentativeMaxIdleTime"`
-	DelegateRepresentativeVotingThresholds DelegateRepresentativeVotingThresholds `json:"delegateRepresentativeVotingThresholds"`
-	DesiredNumberOfStakePools              uint64                                 `json:"desiredNumberOfStakePools"`
-	GovernanceActionDeposit                AdaValue                               `json:"governanceActionDeposit"`
-	GovernanceActionLifetime               uint64                                 `json:"governanceActionLifetime"`
-	StakePoolRetirementEpochBound          uint64                                 `json:"stakePoolRetirementEpochBound"`
-	StakePoolVotingThresholds              StakePoolVotingThresholds              `json:"stakePoolVotingThresholds"`
-}
-
-type ShelleyGenesisParams struct {
-	StartTime              string `json:"startTime"`
-	NetworkMagic           int    `json:"networkMagic"`
-	ActiveSlotsCoefficient string `json:"activeSlotsCoefficient"` // fraction like "1/20"
-	SecurityParameter      int    `json:"securityParameter"`
-	EpochLength            int    `json:"epochLength"`
-	SlotsPerKesPeriod      int    `json:"slotsPerKesPeriod"`
-	MaxKesEvolutions       int    `json:"maxKesEvolutions"`
-	SlotLength             struct {
+// ogmiosGenesisConfig mirrors the subset of the Ogmios shelley genesis
+// configuration that we map onto backend.GenesisParameters.
+type ogmiosGenesisConfig struct {
+	StartTime         string `json:"startTime"`
+	NetworkMagic      int    `json:"networkMagic"`
+	EpochLength       int    `json:"epochLength"`
+	SlotsPerKesPeriod int    `json:"slotsPerKesPeriod"`
+	MaxKesEvolutions  int    `json:"maxKesEvolutions"`
+	SecurityParam     int    `json:"securityParameter"`
+	UpdateQuorum      int    `json:"updateQuorum"`
+	// ActiveSlotsCoefficient is a fraction like "1/20".
+	ActiveSlots       string `json:"activeSlotsCoefficient"`
+	MaxLovelaceSupply int64  `json:"maxLovelaceSupply"`
+	SlotLength        struct {
 		Milliseconds int `json:"milliseconds"`
 	} `json:"slotLength"`
-	UpdateQuorum      int   `json:"updateQuorum"`
-	MaxLovelaceSupply int64 `json:"maxLovelaceSupply"`
 }

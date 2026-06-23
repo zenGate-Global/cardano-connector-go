@@ -9,16 +9,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Salvionied/apollo/constants"
-	"github.com/Salvionied/cbor/v2"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
 	"github.com/tj/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	tests "github.com/zenGate-Global/cardano-connector-go/tests"
 )
 
-// setupKupmios creates a Blockfrost provider for testing
+// preprodNetworkId is the Cardano testnet network id used by preprod.
+const preprodNetworkId = 0
+
+// setupKupmios creates a Kupmios provider for testing
 func setupKupmios(t *testing.T) *KupmiosProvider {
 	t.Helper()
 
@@ -28,12 +30,12 @@ func setupKupmios(t *testing.T) *KupmiosProvider {
 	config := Config{
 		OgmigoEndpoint: ogmigoEndpoint,
 		KupoEndpoint:   kupoEndpoint,
-		NetworkId:      int(constants.PREPROD),
+		NetworkId:      preprodNetworkId,
 	}
 
 	provider, err := New(config)
 	if err != nil {
-		t.Fatalf("Failed to create Blockfrost provider: %v", err)
+		t.Fatalf("Failed to create Kupmios provider: %v", err)
 	}
 
 	return provider
@@ -71,7 +73,7 @@ func TestGetGenesisParams(t *testing.T) {
 
 	assert.Equal(
 		t,
-		float32(0.05),
+		float64(0.05),
 		gp.ActiveSlotsCoefficient,
 		"ActiveSlotsCoefficient should be 0.05",
 	)
@@ -86,7 +88,7 @@ func TestGetGenesisParams(t *testing.T) {
 	assert.Equal(t, 432000, gp.EpochLength, "EpochLength should be 432000")
 	assert.Equal(
 		t,
-		1654041600,
+		int64(1654041600),
 		gp.SystemStart,
 		"SystemStart should be 1654041600",
 	)
@@ -105,7 +107,7 @@ func TestNetwork(t *testing.T) {
 	kupmios := setupKupmios(t)
 	assert.Equal(
 		t,
-		int(constants.PREPROD),
+		preprodNetworkId,
 		kupmios.Network(),
 		"Network should be preprod",
 	)
@@ -265,13 +267,20 @@ func TestGetUtxosByOutRefOgmios(t *testing.T) {
 		t.Errorf("Expected 1 UTxO, got %d", len(utxos))
 	}
 
-	apolloUtxo := adaptOgmigoUtxoToApollo(utxos[0])
+	address, err := common.NewAddress(utxos[0].Address)
+	if err != nil {
+		t.Fatalf("invalid address: %v", err)
+	}
+	utxo, err := ogmiosUtxoToCommon(utxos[0], address)
+	if err != nil {
+		t.Fatalf("ogmiosUtxoToCommon failed: %v", err)
+	}
 
-	if !reflect.DeepEqual(apolloUtxo, tests.ApolloDiscoveryUTxO) {
+	if !reflect.DeepEqual(utxo, tests.ApolloDiscoveryUTxO) {
 		t.Errorf(
 			"Expected UTxO %+v, got %+v",
 			tests.ApolloDiscoveryUTxO,
-			apolloUtxo,
+			utxo,
 		)
 	}
 }
@@ -309,7 +318,7 @@ func TestGetDatum(t *testing.T) {
 		t.Fatalf("GetDatum failed: %v", err)
 	}
 
-	datumBytes, err := cbor.Marshal(datum)
+	datumBytes, err := datum.MarshalCBOR()
 	if err != nil {
 		t.Fatalf("Failed to marshal datum: %v", err)
 	}

@@ -1,418 +1,355 @@
 package blockfrost
 
 import (
-	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/Salvionied/apollo/serialization"
-	"github.com/Salvionied/apollo/serialization/Address"
-	"github.com/Salvionied/apollo/serialization/Amount"
-	"github.com/Salvionied/apollo/serialization/Asset"
-	"github.com/Salvionied/apollo/serialization/AssetName"
-	"github.com/Salvionied/apollo/serialization/MultiAsset"
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Policy"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/TransactionInput"
-	"github.com/Salvionied/apollo/serialization/TransactionOutput"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/serialization/Value"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/cbor"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
+	"github.com/blinklabs-io/gouroboros/ledger/mary"
+	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
-// adaptBlockfrostAddressUTxOs converts Blockfrost address UTxOs to Apollo UTxOs
-func adaptBlockfrostAddressUTxOs(
-	bfUtxos []BlockfrostUTXO,
-	originalAddress string,
-	ctx context.Context,
-	b *BlockfrostProvider,
-) []UTxO.UTxO {
-	utxos := make([]UTxO.UTxO, 0, len(bfUtxos))
-	for _, bfUtxo := range bfUtxos {
-		decodedTxID, err := hex.DecodeString(bfUtxo.TxHash)
-		if err != nil {
-			continue
-		}
-		txIn := TransactionInput.TransactionInput{
-			TransactionId: decodedTxID,
-			Index:         bfUtxo.OutputIndex,
-		}
-
-		var lovelaceAmount int64
-		multiAssets := make(MultiAsset.MultiAsset[int64])
-
-		for _, item := range bfUtxo.Amount {
-			quantity, err := strconv.ParseInt(item.Quantity, 10, 64)
-			if err != nil {
-				continue
-			}
-			if item.Unit == "lovelace" {
-				lovelaceAmount = quantity
-			} else {
-				policyIDHex := item.Unit[:56]
-				assetNameHex := item.Unit[56:]
-				policyID := Policy.PolicyId{Value: policyIDHex}
-				assetName := AssetName.NewAssetNameFromHexString(assetNameHex)
-				if _, ok := multiAssets[policyID]; !ok {
-					multiAssets[policyID] = make(Asset.Asset[int64])
-				}
-				multiAssets[policyID][*assetName] = quantity
-			}
-		}
-
-		var val Value.Value
-		if len(multiAssets) > 0 {
-			val = Value.Value{
-				Am: Amount.Amount{
-					Coin:  lovelaceAmount,
-					Value: multiAssets,
-				},
-				HasAssets: true,
-			}
-		} else {
-			val = Value.Value{Coin: lovelaceAmount, HasAssets: false}
-		}
-
-		isPostAlonzo := bfUtxo.DataHash != "" || bfUtxo.InlineDatum != "" ||
-			bfUtxo.ReferenceScriptHash != ""
-
-		addr, err := Address.DecodeAddress(originalAddress)
-		if err != nil {
-			continue
-		}
-
-		var txOut TransactionOutput.TransactionOutput
-
-		if isPostAlonzo {
-			txOut = TransactionOutput.TransactionOutput{
-				IsPostAlonzo: true,
-				PostAlonzo: TransactionOutput.TransactionOutputAlonzo{
-					Address: addr,
-					Amount:  val.ToAlonzoValue(),
-					Datum:   nil,
-				},
-			}
-
-			if bfUtxo.DataHash != "" {
-				dhBytes, err := hex.DecodeString(bfUtxo.DataHash)
-				if err == nil {
-					datumOpt := PlutusData.DatumOptionHash(dhBytes)
-					txOut.PostAlonzo.Datum = &datumOpt
-				}
-			}
-
-			if bfUtxo.InlineDatum != "" {
-				datumBytes, err := hex.DecodeString(bfUtxo.InlineDatum)
-				if err == nil {
-					var pd PlutusData.PlutusData
-					if cbor.Unmarshal(datumBytes, &pd) == nil {
-						datumOpt := PlutusData.DatumOptionInline(&pd)
-						txOut.PostAlonzo.Datum = &datumOpt
-					}
-				}
-			}
-
-			if bfUtxo.ReferenceScriptHash != "" {
-				scriptCbor, err := b.GetScriptCborByScriptHash(
-					ctx,
-					bfUtxo.ReferenceScriptHash,
-				)
-				if err != nil {
-					continue
-				}
-				scriptCborBytes, err := hex.DecodeString(scriptCbor)
-				if err != nil {
-					continue
-				}
-				scriptRefContent, err := scriptRefFromHash(
-					bfUtxo.ReferenceScriptHash,
-					scriptCborBytes,
-				)
-				if err != nil {
-					continue
-				}
-				txOut.PostAlonzo.ScriptRef = &scriptRefContent
-			}
-		} else {
-			txOut = TransactionOutput.TransactionOutput{
-				IsPostAlonzo: false,
-				PreAlonzo: TransactionOutput.TransactionOutputShelley{
-					Address:   addr,
-					Amount:    val,
-					DatumHash: serialization.DatumHash{},
-					HasDatum:  false,
-				},
-			}
-		}
-
-		utxos = append(utxos, UTxO.UTxO{Input: txIn, Output: txOut})
-	}
-	return utxos
-}
-
-// adaptBlockfrostTxOutputToApolloUTxO converts a Blockfrost transaction output to Apollo UTxO
-func adaptBlockfrostTxOutputToApolloUTxO(
-	txHashStr string,
-	bfOut Base.Output,
-	ctx context.Context,
-	b *BlockfrostProvider,
-) (UTxO.UTxO, error) {
-	txHashBytes, err := hex.DecodeString(txHashStr)
+// toUtxo builds a gouroboros common.Utxo from a BlockFrost UTxO, including the
+// value (lovelace + native assets) and a bare datum-hash DatumOption. Inline
+// datums and reference scripts are layered on afterwards by hydrateUtxo.
+func (raw *bfAddressUTxO) toUtxo(address common.Address) (common.Utxo, error) {
+	hashBytes, err := hex.DecodeString(raw.TxHash)
 	if err != nil {
-		return UTxO.UTxO{}, fmt.Errorf("invalid tx_hash hex: %w", err)
+		return common.Utxo{}, err
 	}
-	input := TransactionInput.TransactionInput{
-		TransactionId: txHashBytes,
-		Index:         bfOut.OutputIndex,
-	}
-
-	addr, err := Address.DecodeAddress(bfOut.Address)
-	if err != nil {
-		return UTxO.UTxO{}, fmt.Errorf(
-			"failed to decode address %s: %w",
-			bfOut.Address,
-			err,
+	if len(hashBytes) != common.Blake2b256Size {
+		return common.Utxo{}, fmt.Errorf(
+			"invalid tx hash length: expected %d bytes, got %d",
+			common.Blake2b256Size,
+			len(hashBytes),
 		)
 	}
+	var txId common.Blake2b256
+	copy(txId[:], hashBytes)
 
-	var lovelaceAmount int64
-	multiAssets := make(MultiAsset.MultiAsset[int64])
-	for _, item := range bfOut.Amount {
-		quantity, errConv := strconv.ParseInt(item.Quantity, 10, 64)
-		if errConv != nil {
-			return UTxO.UTxO{}, fmt.Errorf(
-				"invalid quantity %s for unit %s: %w",
-				item.Quantity,
-				item.Unit,
-				errConv,
-			)
-		}
-		if item.Unit == "lovelace" {
-			lovelaceAmount = quantity
+	if raw.OutputIndex < 0 {
+		return common.Utxo{}, fmt.Errorf("negative output index: %d", raw.OutputIndex)
+	}
+	if raw.OutputIndex > math.MaxUint32 {
+		return common.Utxo{}, fmt.Errorf("output index %d exceeds uint32 range", raw.OutputIndex)
+	}
+	input := shelley.ShelleyTransactionInput{
+		TxId:        txId,
+		OutputIndex: uint32(raw.OutputIndex),
+	}
+
+	var lovelace uint64
+	assetData := make(map[common.Blake2b224]map[cbor.ByteString]*big.Int)
+
+	for _, amt := range raw.Amount {
+		if amt.Unit == "lovelace" {
+			qty, err := strconv.ParseInt(amt.Quantity, 10, 64)
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("invalid lovelace quantity %q: %w", amt.Quantity, err)
+			}
+			if qty < 0 {
+				return common.Utxo{}, fmt.Errorf("negative lovelace quantity: %d", qty)
+			}
+			lovelace = uint64(qty) //nolint:gosec // validated non-negative above
+		} else if len(amt.Unit) >= 56 {
+			qty, ok := new(big.Int).SetString(amt.Quantity, 10)
+			if !ok {
+				return common.Utxo{}, fmt.Errorf("invalid asset quantity %q for unit %s", amt.Quantity, amt.Unit)
+			}
+			if qty.Sign() < 0 {
+				return common.Utxo{}, fmt.Errorf("negative asset quantity %s for unit %s", qty.String(), amt.Unit)
+			}
+			policyId, assetName, err := backend.ParseAssetUnit(amt.Unit)
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("invalid asset unit %q: %w", amt.Unit, err)
+			}
+			if _, ok := assetData[policyId]; !ok {
+				assetData[policyId] = make(map[cbor.ByteString]*big.Int)
+			}
+			assetData[policyId][assetName] = qty
 		} else {
-			policyIDHex := item.Unit[:56]
-			assetNameHex := item.Unit[56:]
-			policyID := Policy.PolicyId{Value: policyIDHex}
-			assetName := AssetName.NewAssetNameFromHexString(assetNameHex)
-			if _, ok := multiAssets[policyID]; !ok {
-				multiAssets[policyID] = make(Asset.Asset[int64])
-			}
-			multiAssets[policyID][*assetName] = quantity
-		}
-	}
-	var val Value.Value
-	if len(multiAssets) > 0 {
-		val = Value.Value{
-			Am:        Amount.Amount{Coin: lovelaceAmount, Value: multiAssets},
-			HasAssets: true,
-		}
-	} else {
-		val = Value.Value{Coin: lovelaceAmount, HasAssets: false}
-	}
-
-	var output TransactionOutput.TransactionOutput
-
-	// Determine era based on presence of datum-related fields and script references:
-	// Pre-Alonzo: No datum-related field at all
-	// Alonzo-era: Has DataHash but no InlineDatum or ReferenceScriptHash
-	// Babbage-era: Has InlineDatum or ReferenceScriptHash
-	isPostAlonzo := bfOut.DataHash != "" || bfOut.InlineDatum != "" ||
-		bfOut.ReferenceScriptHash != ""
-
-	if isPostAlonzo {
-		// Post-Alonzo era (Alonzo or Babbage)
-		output = TransactionOutput.TransactionOutput{
-			IsPostAlonzo: true,
-			PostAlonzo: TransactionOutput.TransactionOutputAlonzo{
-				Address: addr,
-				Amount:  val.ToAlonzoValue(),
-				Datum:   nil,
-			},
-		}
-
-		// Handle datum hash (Alonzo-era feature)
-		if bfOut.DataHash != "" {
-			dhBytes, err := hex.DecodeString(bfOut.DataHash)
-			if err == nil {
-				datumOpt := PlutusData.DatumOptionHash(dhBytes)
-				output.PostAlonzo.Datum = &datumOpt
-			}
-		}
-
-		// Handle inline datum (Babbage-era feature) - takes precedence over datum hash
-		if bfOut.InlineDatum != "" {
-			decoded, err := hex.DecodeString(bfOut.InlineDatum)
-			if err != nil {
-				return UTxO.UTxO{}, fmt.Errorf(
-					"failed to decode inline datum: %w",
-					err,
-				)
-			}
-			var plutusData PlutusData.PlutusData
-			err = cbor.Unmarshal(decoded, &plutusData)
-			if err != nil {
-				return UTxO.UTxO{}, fmt.Errorf(
-					"failed to unmarshal inline datum: %w",
-					err,
-				)
-			}
-
-			datumOpt := PlutusData.DatumOptionInline(&plutusData)
-			output.PostAlonzo.Datum = &datumOpt
-		}
-
-		// Handle reference script (Babbage-era feature)
-		if bfOut.ReferenceScriptHash != "" {
-			scriptCbor, err := b.GetScriptCborByScriptHash(
-				ctx,
-				bfOut.ReferenceScriptHash,
+			return common.Utxo{}, fmt.Errorf(
+				"unrecognized unit format %q: expected \"lovelace\" or hex string >= 56 chars (policy_id + asset_name)",
+				amt.Unit,
 			)
-			if err != nil {
-				return UTxO.UTxO{}, fmt.Errorf(
-					"failed to get script cbor: %w",
-					err,
-				)
-			}
-			scriptCborBytes, err := hex.DecodeString(scriptCbor)
-			if err != nil {
-				return UTxO.UTxO{}, fmt.Errorf(
-					"failed to decode script cbor: %w",
-					err,
-				)
-			}
-			scriptRefContent, err := scriptRefFromHash(
-				bfOut.ReferenceScriptHash,
-				scriptCborBytes,
-			)
-			if err != nil {
-				return UTxO.UTxO{}, fmt.Errorf(
-					"failed to build reference script ref: %w",
-					err,
-				)
-			}
-			output.PostAlonzo.ScriptRef = &scriptRefContent
-		}
-	} else {
-		output = TransactionOutput.TransactionOutput{
-			IsPostAlonzo: false,
-			PreAlonzo: TransactionOutput.TransactionOutputShelley{
-				Address:   addr,
-				Amount:    val,
-				DatumHash: serialization.DatumHash{},
-				HasDatum:  false,
-			},
 		}
 	}
 
-	return UTxO.UTxO{Input: input, Output: output}, nil
+	var assets *common.MultiAsset[common.MultiAssetTypeOutput]
+	if len(assetData) > 0 {
+		ma := common.NewMultiAsset[common.MultiAssetTypeOutput](assetData)
+		assets = &ma
+	}
+
+	output := babbage.BabbageTransactionOutput{
+		OutputAddress: address,
+		OutputAmount: mary.MaryTransactionOutputValue{
+			Amount: lovelace,
+			Assets: assets,
+		},
+	}
+
+	// Map datum hash to the output's DatumOption when no inline datum is present.
+	if raw.DataHash != "" && (len(raw.InlineDatum) == 0 || string(raw.InlineDatum) == "null") {
+		dhBytes, err := hex.DecodeString(raw.DataHash)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("invalid data hash hex %q: %w", raw.DataHash, err)
+		}
+		if len(dhBytes) != common.Blake2b256Size {
+			return common.Utxo{}, fmt.Errorf(
+				"invalid data hash length: expected %d bytes, got %d",
+				common.Blake2b256Size,
+				len(dhBytes),
+			)
+		}
+		var hash common.Blake2b256
+		copy(hash[:], dhBytes)
+		cborBytes, err := cbor.Encode([]any{0, hash})
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("failed to encode datum option hash: %w", err)
+		}
+		var opt babbage.BabbageTransactionOutputDatumOption
+		if err := opt.UnmarshalCBOR(cborBytes); err != nil {
+			return common.Utxo{}, fmt.Errorf("failed to unmarshal datum option: %w", err)
+		}
+		output.DatumOption = &opt
+	}
+
+	return common.Utxo{
+		Id:     input,
+		Output: &output,
+	}, nil
 }
 
-// adaptBlockfrostAccountToDelegation converts Blockfrost account details to connector delegation
-func adaptBlockfrostAccountToDelegation(
-	bfAcc BlockfrostAccountDetails,
-) connector.Delegation {
+// inlineDatumOptionFromBlockfrost builds an inline datum option from BlockFrost's
+// inline_datum field, which is a CBOR-encoded datum serialized as a hex string.
+// The original CBOR bytes are preserved exactly (no JSON decode/re-encode
+// round-trip) so the datum hash is not altered by a non-canonical re-encoding.
+func inlineDatumOptionFromBlockfrost(raw json.RawMessage) (*babbage.BabbageTransactionOutputDatumOption, error) {
+	var datumCborHex string
+	if err := json.Unmarshal(raw, &datumCborHex); err != nil {
+		return nil, fmt.Errorf("inline datum must be a CBOR hex string: %w", err)
+	}
+	datumBytes, err := hex.DecodeString(datumCborHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid inline datum CBOR hex %q: %w", datumCborHex, err)
+	}
+	// Inline datum option: [1, #6.24(datum_cbor)]
+	cborBytes, err := cbor.Encode([]any{1, cbor.Tag{Number: 24, Content: datumBytes}})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode inline datum option: %w", err)
+	}
+	var opt babbage.BabbageTransactionOutputDatumOption
+	if err := opt.UnmarshalCBOR(cborBytes); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal inline datum option: %w", err)
+	}
+	return &opt, nil
+}
+
+// scriptRefFromHash builds a typed gouroboros ScriptRef from a reference
+// script's CBOR by detecting its language. It hashes the script as a native
+// script and each Plutus version, matching against the known reference script
+// hash to both determine the language and validate the bytes. Unlike the prior
+// apollo v1 implementation, native scripts ARE supported and an undeterminable
+// language is a hard error rather than a raw-cbor fallback.
+func scriptRefFromHash(scriptHash common.Blake2b224, scriptCbor []byte) (*common.ScriptRef, error) {
+	var native common.NativeScript
+	if _, err := cbor.Decode(scriptCbor, &native); err == nil && native.Hash() == scriptHash {
+		return &common.ScriptRef{
+			Type:   common.ScriptRefTypeNativeScript,
+			Script: native,
+		}, nil
+	}
+	v1 := common.PlutusV1Script(scriptCbor)
+	if v1.Hash() == scriptHash {
+		return &common.ScriptRef{Type: common.ScriptRefTypePlutusV1, Script: v1}, nil
+	}
+	v2 := common.PlutusV2Script(scriptCbor)
+	if v2.Hash() == scriptHash {
+		return &common.ScriptRef{Type: common.ScriptRefTypePlutusV2, Script: v2}, nil
+	}
+	v3 := common.PlutusV3Script(scriptCbor)
+	if v3.Hash() == scriptHash {
+		return &common.ScriptRef{Type: common.ScriptRefTypePlutusV3, Script: v3}, nil
+	}
+	return nil, errors.New("unable to determine reference script language from script hash")
+}
+
+// bfScriptRefFromScript encodes a reference script into the Ogmios-v5 TxOut
+// "script" wire shape used by /utils/txs/evaluate/utxos:
+// {"plutus:v1"|"plutus:v2"|"plutus:v3"|"plutus:v4": "<base16 serialised script>"}.
+// Native reference scripts are not representable in that schema and are rejected.
+func bfScriptRefFromScript(script common.Script) (*bfScriptRef, error) {
+	scriptHex := hex.EncodeToString(script.RawScriptBytes())
+	ref := &bfScriptRef{}
+	switch script.(type) {
+	case common.PlutusV1Script:
+		ref.PlutusV1 = &scriptHex
+	case common.PlutusV2Script:
+		ref.PlutusV2 = &scriptHex
+	case common.PlutusV3Script:
+		ref.PlutusV3 = &scriptHex
+	case common.PlutusV4Script:
+		ref.PlutusV4 = &scriptHex
+	default:
+		return nil, fmt.Errorf(
+			"unsupported script type %T in additional UTxO: only Plutus v1/v2/v3/v4 reference scripts can be encoded for /utils/txs/evaluate/utxos",
+			script,
+		)
+	}
+	return ref, nil
+}
+
+// bigIntToInt64 converts a big.Int quantity to int64, rejecting values that do
+// not fit rather than silently truncating.
+func bigIntToInt64(v *big.Int) (int64, error) {
+	if v == nil {
+		return 0, nil
+	}
+	if !v.IsInt64() {
+		return 0, fmt.Errorf("quantity %s does not fit in int64", v.String())
+	}
+	return v.Int64(), nil
+}
+
+// bfAdditionalUtxoItemFromUtxo builds a single [txIn, txOut] additional-UTxO
+// entry from a resolved gouroboros UTxO.
+func bfAdditionalUtxoItemFromUtxo(utxo common.Utxo) (bfAdditionalUtxoItem, error) {
+	out := utxo.Output
+
+	txIn := bfTxIn{
+		TxId:  hex.EncodeToString(utxo.Id.Id().Bytes()),
+		Index: int(utxo.Id.Index()),
+	}
+
+	coins, err := bigIntToInt64(out.Amount())
+	if err != nil {
+		return bfAdditionalUtxoItem{}, fmt.Errorf("invalid lovelace amount: %w", err)
+	}
+	val := bfValue{Coins: coins}
+	if assets := out.Assets(); assets != nil {
+		assetMap := make(map[string]int64)
+		for _, policyId := range assets.Policies() {
+			policyHex := hex.EncodeToString(policyId.Bytes())
+			for _, assetName := range assets.Assets(policyId) {
+				key := policyHex
+				if len(assetName) > 0 {
+					key = policyHex + "." + hex.EncodeToString(assetName)
+				}
+				qty, err := bigIntToInt64(assets.Asset(policyId, assetName))
+				if err != nil {
+					return bfAdditionalUtxoItem{}, fmt.Errorf("invalid asset quantity for %s: %w", key, err)
+				}
+				assetMap[key] = qty
+			}
+		}
+		if len(assetMap) > 0 {
+			val.Assets = assetMap
+		}
+	}
+
+	txOut := bfTxOut{
+		Address: out.Address().String(),
+		Value:   val,
+	}
+
+	// Inline datum CBOR hex goes in Datum; a bare datum hash goes in DatumHash.
+	if datum := out.Datum(); datum != nil {
+		datumCbor, err := datum.MarshalCBOR()
+		if err != nil {
+			return bfAdditionalUtxoItem{}, fmt.Errorf("failed to encode inline datum: %w", err)
+		}
+		datumHex := hex.EncodeToString(datumCbor)
+		txOut.Datum = &datumHex
+	} else if datumHash := out.DatumHash(); datumHash != nil {
+		datumHashHex := hex.EncodeToString(datumHash.Bytes())
+		txOut.DatumHash = &datumHashHex
+	}
+
+	if script := out.ScriptRef(); script != nil {
+		ref, err := bfScriptRefFromScript(script)
+		if err != nil {
+			return bfAdditionalUtxoItem{}, err
+		}
+		txOut.ScriptRef = ref
+	}
+
+	return bfAdditionalUtxoItem{txIn, txOut}, nil
+}
+
+// adaptBlockfrostAccountToDelegation converts Blockfrost account details to a connector delegation.
+func adaptBlockfrostAccountToDelegation(bfAcc BlockfrostAccountDetails) connector.Delegation {
 	rewards := uint64(0)
 	if bfAcc.WithdrawableAmount != "" {
-		parsedRewards, err := strconv.ParseUint(
-			bfAcc.WithdrawableAmount,
-			10,
-			64,
-		)
-		if err == nil {
-			rewards = parsedRewards
+		if parsed, err := strconv.ParseUint(bfAcc.WithdrawableAmount, 10, 64); err == nil {
+			rewards = parsed
 		}
 	}
 
 	poolID := ""
-	if bfAcc.PoolId != nil { // PoolId is a *string, so check for nil
+	if bfAcc.PoolId != nil {
 		poolID = *bfAcc.PoolId
 	}
 
-	// Blockfrost's "active" field for an account means it's on-chain.
-	// Actual delegation "activeness" to a specific pool is better determined by pool_id being non-null.
-	// The `active_epoch` field can also be used to determine if the delegation is current.
-	// For simplicity here, if poolId is present, we consider it an active delegation.
-	// The definition of "Active" in connector.Delegation might need refinement
-	// based on whether it means "account is active" or "delegation to a pool is active".
-	// Assuming "delegation to a pool is active":
 	delegationActive := poolID != "" && bfAcc.Active
 
 	return connector.Delegation{
 		PoolId:  poolID,
 		Rewards: rewards,
-		Active:  delegationActive, // Or bfAcc.Active if that's the intended meaning
-		// Epoch: // bfAcc.ActiveEpoch could be used here if not null
+		Active:  delegationActive,
 	}
 }
 
-// adaptBlockfrostEvalResult converts Blockfrost evaluation result to connector eval redeemers
-func adaptBlockfrostEvalResult(
-	bfEvalResp bfEvalResult,
-) map[string]Redeemer.ExecutionUnits {
-	results := make(map[string]Redeemer.ExecutionUnits)
-	for key, units := range bfEvalResp.Result {
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			continue
-		}
-		tagStr, indexStr := parts[0], parts[1]
-		_, err := strconv.ParseUint(indexStr, 10, 32)
-		if err != nil {
-			continue
-		}
-
-		// Convert tag to standard format
-		purpose := strings.ToLower(tagStr)
-		switch purpose {
-		case "cert":
-			purpose = "certificate"
-		case "reward", "withdraw":
-			purpose = "withdrawal"
-		case "spend", "mint":
-			// These are already in the correct format
-		default:
-			continue
-		}
-
-		results[fmt.Sprintf("%s:%s", purpose, indexStr)] = Redeemer.ExecutionUnits{
-			Mem:   int64(units.Memory),
-			Steps: int64(units.Steps),
-		}
+// toProtocolParams converts the BlockFrost protocol-params response into apollo
+// v2's backend.ProtocolParameters.
+func (p *bfProtocolParams) toProtocolParams() (backend.ProtocolParameters, error) {
+	maxBlockSize, err := backend.BoundedInt(p.MaxBlockSize, "max_block_size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
 	}
-	return results
-}
-
-// ToBaseParams converts BlockfrostProtocolParameters to Base.ProtocolParameters
-func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
-	costModels := make(map[string][]int64)
-	for key, nestedMap := range p.CostModels {
-		values := make([]int64, 0, len(nestedMap.order))
-		for _, nestedKey := range nestedMap.order {
-			values = append(values, nestedMap.values[nestedKey])
-		}
-		costModels[key] = values
+	maxTxSize, err := backend.BoundedInt(p.MaxTxSize, "max_tx_size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	maxBlockHeaderSize, err := backend.BoundedInt(p.MaxBlockHeaderSize, "max_block_header_size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	collateralPercent, err := backend.BoundedInt(p.CollateralPercent, "collateral_percent")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	maxCollateralInputs, err := backend.BoundedInt(p.MaxCollateralIn, "max_collateral_inputs")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
 	}
 
-	return Base.ProtocolParameters{
-		MinFeeConstant:                   int64(p.MinFeeConstant),
-		MinFeeCoefficient:                int64(p.MinFeeCoefficient),
-		MaxBlockSize:                     p.MaxBlockSize,
-		MaxTxSize:                        p.MaxTxSize,
-		MaxBlockHeaderSize:               p.MaxBlockHeaderSize,
-		KeyDeposits:                      p.KeyDeposits,
-		PoolDeposits:                     p.PoolDeposits,
-		PooolInfluence:                   p.PooolInfluence,
-		MonetaryExpansion:                p.MonetaryExpansion,
-		TreasuryExpansion:                p.TreasuryExpansion,
-		DecentralizationParam:            p.DecentralizationParam,
+	pp := backend.ProtocolParameters{
+		MinFeeConstant:                   p.MinFeeB,
+		MinFeeCoefficient:                p.MinFeeA,
+		MaxBlockSize:                     maxBlockSize,
+		MaxTxSize:                        maxTxSize,
+		MaxBlockHeaderSize:               maxBlockHeaderSize,
+		KeyDeposits:                      p.KeyDeposit,
+		PoolDeposits:                     p.PoolDeposit,
+		PoolInfluence:                    p.A0,
+		MonetaryExpansion:                p.Rho,
+		TreasuryExpansion:                p.Tau,
+		DecentralizationParam:            p.Decentralisation,
 		ExtraEntropy:                     p.ExtraEntropy,
-		ProtocolMajorVersion:             p.ProtocolMajorVersion,
-		ProtocolMinorVersion:             p.ProtocolMinorVersion,
+		ProtocolMajorVersion:             p.ProtocolMajorVer,
+		ProtocolMinorVersion:             p.ProtocolMinorVer,
 		MinUtxo:                          p.MinUtxo,
 		MinPoolCost:                      p.MinPoolCost,
 		PriceMem:                         p.PriceMem,
@@ -422,59 +359,205 @@ func (p BlockfrostProtocolParameters) ToBaseParams() Base.ProtocolParameters {
 		MaxBlockExMem:                    p.MaxBlockExMem,
 		MaxBlockExSteps:                  p.MaxBlockExSteps,
 		MaxValSize:                       p.MaxValSize,
-		CollateralPercent:                p.CollateralPercent,
-		MaxCollateralInuts:               p.MaxCollateralInuts,
+		CollateralPercent:                collateralPercent,
+		MaxCollateralInputs:              maxCollateralInputs,
 		CoinsPerUtxoWord:                 p.CoinsPerUtxoWord,
-		CoinsPerUtxoByte:                 p.CoinsPerUtxoByte,
-		CostModelsRaw:                    costModels,
+		CoinsPerUtxoByte:                 p.CoinsPerUtxoSize,
 		MaximumReferenceScriptsSize:      p.MaximumReferenceScriptsSize,
 		MinFeeReferenceScriptsRange:      p.MinFeeReferenceScriptsRange,
 		MinFeeReferenceScriptsBase:       p.MinFeeReferenceScriptsBase,
 		MinFeeReferenceScriptsMultiplier: p.MinFeeReferenceScriptsMultiplier,
 	}
+
+	// Cost models may arrive as either the array format
+	// ({"PlutusV1": [205665, ...]}) or the keyed format
+	// ({"PlutusV1": {"addInteger-cpu-...": 205665, ...}}). The ledger
+	// serializes cost models as a flat list ordered by alphabetically-sorted
+	// parameter names, so the keyed form is flattened in sorted-key order.
+	if len(p.CostModels) > 0 {
+		var arrayModels map[string][]int64
+		if err := json.Unmarshal(p.CostModels, &arrayModels); err == nil {
+			pp.CostModels = arrayModels
+		} else {
+			var keyedModels map[string]map[string]int64
+			if err := json.Unmarshal(p.CostModels, &keyedModels); err != nil {
+				return pp, fmt.Errorf("failed to parse cost models: %w", err)
+			}
+			pp.CostModels = make(map[string][]int64, len(keyedModels))
+			for lang, costs := range keyedModels {
+				sortedKeys := make([]string, 0, len(costs))
+				for k := range costs {
+					sortedKeys = append(sortedKeys, k)
+				}
+				sort.Strings(sortedKeys)
+				values := make([]int64, 0, len(costs))
+				for _, k := range sortedKeys {
+					values = append(values, costs[k])
+				}
+				pp.CostModels[lang] = values
+			}
+		}
+	}
+
+	return pp, nil
 }
 
-// scriptRefFromHash builds a typed apollo ScriptRef from a reference script's
-// CBOR by detecting its Plutus language version. It hashes the script as each
-// Plutus version and matches against the known reference script hash, which both
-// determines the language and validates the bytes. Native (timelock) scripts and
-// any script whose language cannot be determined fall back to the raw CBOR,
-// preserving prior behavior (apollo has no native ScriptRef constructor, and
-// native reference scripts are not used by the evaluation path).
-func scriptRefFromHash(
-	scriptHashHex string,
-	scriptCbor []byte,
-) (PlutusData.ScriptRef, error) {
-	hashBytes, err := hex.DecodeString(scriptHashHex)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"invalid reference script hash %q: %w",
-			scriptHashHex,
-			err,
-		)
+// parseRedeemerPurpose maps an Ogmios redeemer purpose string to a gouroboros
+// RedeemerTag. backend.ParseRedeemerTag accepts spend/mint/cert/publish/reward/
+// withdraw; Ogmios v5 additionally emits the long spellings "certificate" and
+// "withdrawal", so those are normalized to the accepted forms first
+// (case-insensitively) before delegating.
+func parseRedeemerPurpose(purpose string) (common.RedeemerTag, error) {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "certificate":
+		return backend.ParseRedeemerTag("cert")
+	case "withdrawal":
+		return backend.ParseRedeemerTag("withdraw")
+	default:
+		return backend.ParseRedeemerTag(purpose)
 	}
-	var want serialization.ScriptHash
-	if len(hashBytes) != len(want) {
-		return nil, fmt.Errorf(
-			"invalid reference script hash length: expected %d bytes, got %d",
-			len(want),
-			len(hashBytes),
-		)
-	}
-	copy(want[:], hashBytes)
+}
 
-	matches := func(h serialization.ScriptHash, err error) bool {
-		return err == nil && h == want
-	}
+// jsonValuePresent reports whether a raw JSON field was present and not null.
+func jsonValuePresent(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
 
-	if v1 := PlutusData.PlutusV1Script(scriptCbor); matches(v1.Hash()) {
-		return PlutusData.NewV1ScriptRef(v1)
+// parseEvaluateTxResponse parses a BlockFrost /utils/txs/evaluate response.
+// BlockFrost proxies Ogmios, so the payload may be either the legacy Ogmios v5
+// jsonwsp shape ({"result":{"EvaluationResult":{...}}}) or the Ogmios v6 shape
+// ({"result":[{"validator":...,"budget":...}, ...]}, with failures reported as
+// a top-level {"error":{...}} object).
+func parseEvaluateTxResponse(data []byte) (map[common.RedeemerKey]common.ExUnits, error) {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
 	}
-	if v2 := PlutusData.PlutusV2Script(scriptCbor); matches(v2.Hash()) {
-		return PlutusData.NewV2ScriptRef(v2)
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse evaluate response: %w", err)
 	}
-	if v3 := PlutusData.PlutusV3Script(scriptCbor); matches(v3.Hash()) {
-		return PlutusData.NewV3ScriptRef(v3)
+	if jsonValuePresent(envelope.Error) {
+		var ogmiosErr struct {
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(envelope.Error, &ogmiosErr); err == nil && ogmiosErr.Message != "" {
+			if jsonValuePresent(ogmiosErr.Data) {
+				return nil, fmt.Errorf("%w (code %d): %s: %s",
+					connector.ErrEvaluationFailed, ogmiosErr.Code, ogmiosErr.Message, string(ogmiosErr.Data))
+			}
+			return nil, fmt.Errorf("%w (code %d): %s", connector.ErrEvaluationFailed, ogmiosErr.Code, ogmiosErr.Message)
+		}
+		return nil, fmt.Errorf("%w: %s", connector.ErrEvaluationFailed, string(envelope.Error))
 	}
-	return PlutusData.ScriptRef(scriptCbor), nil
+	if !jsonValuePresent(envelope.Result) {
+		return nil, fmt.Errorf("unrecognized evaluate response (no result or error): %s", evalErrorSnippet(data))
+	}
+	if strings.HasPrefix(strings.TrimSpace(string(envelope.Result)), "[") {
+		return parseOgmiosV6EvaluationResult(envelope.Result)
+	}
+	return parseOgmiosV5EvaluationResult(envelope.Result)
+}
+
+// parseOgmiosV6EvaluationResult parses the Ogmios v6 evaluateTransaction result
+// array: [{"validator":{"purpose":...,"index":...},"budget":{"memory":...,"cpu":...}}].
+func parseOgmiosV6EvaluationResult(raw json.RawMessage) (map[common.RedeemerKey]common.ExUnits, error) {
+	var items []struct {
+		Validator struct {
+			Purpose string `json:"purpose"`
+			Index   uint64 `json:"index"`
+		} `json:"validator"`
+		Budget struct {
+			Memory uint64 `json:"memory"`
+			Cpu    uint64 `json:"cpu"`
+		} `json:"budget"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("failed to parse evaluation result: %w", err)
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("%w: script evaluation returned no results", connector.ErrEvaluationFailed)
+	}
+	result := make(map[common.RedeemerKey]common.ExUnits, len(items))
+	for _, item := range items {
+		if jsonValuePresent(item.Error) {
+			return nil, fmt.Errorf("%w for validator %s:%d: %s",
+				connector.ErrEvaluationFailed, item.Validator.Purpose, item.Validator.Index, string(item.Error))
+		}
+		if item.Validator.Purpose == "" {
+			return nil, fmt.Errorf("malformed evaluation result entry: %s", evalErrorSnippet(raw))
+		}
+		tag, err := parseRedeemerPurpose(item.Validator.Purpose)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redeemer purpose %q: %w", item.Validator.Purpose, err)
+		}
+		if item.Validator.Index > math.MaxUint32 {
+			return nil, fmt.Errorf("redeemer index %d exceeds uint32 range", item.Validator.Index)
+		}
+		if item.Budget.Memory > math.MaxInt64 || item.Budget.Cpu > math.MaxInt64 {
+			return nil, fmt.Errorf("ExUnits overflow for validator %s:%d: memory=%d cpu=%d",
+				item.Validator.Purpose, item.Validator.Index, item.Budget.Memory, item.Budget.Cpu)
+		}
+		key := common.RedeemerKey{Tag: tag, Index: uint32(item.Validator.Index)}
+		result[key] = common.ExUnits{Memory: int64(item.Budget.Memory), Steps: int64(item.Budget.Cpu)}
+	}
+	return result, nil
+}
+
+// parseOgmiosV5EvaluationResult parses the legacy Ogmios v5 jsonwsp result
+// object: {"EvaluationResult":{"tag:index":{"memory":...,"steps":...}}} or
+// {"EvaluationFailure":{...}}.
+func parseOgmiosV5EvaluationResult(raw json.RawMessage) (map[common.RedeemerKey]common.ExUnits, error) {
+	var v5Result struct {
+		EvaluationResult map[string]struct {
+			Memory uint64 `json:"memory"`
+			Steps  uint64 `json:"steps"`
+		} `json:"EvaluationResult"`
+		EvaluationFailure json.RawMessage `json:"EvaluationFailure"`
+	}
+	if err := json.Unmarshal(raw, &v5Result); err != nil {
+		return nil, fmt.Errorf("failed to parse evaluation result: %w", err)
+	}
+	if jsonValuePresent(v5Result.EvaluationFailure) {
+		return nil, fmt.Errorf("%w: %s", connector.ErrEvaluationFailed, string(v5Result.EvaluationFailure))
+	}
+	if v5Result.EvaluationResult == nil {
+		return nil, fmt.Errorf("unrecognized evaluate response: %s", evalErrorSnippet(raw))
+	}
+	if len(v5Result.EvaluationResult) == 0 {
+		return nil, fmt.Errorf("%w: script evaluation returned no results", connector.ErrEvaluationFailed)
+	}
+	result := make(map[common.RedeemerKey]common.ExUnits, len(v5Result.EvaluationResult))
+	for key, budget := range v5Result.EvaluationResult {
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("malformed redeemer key %q: expected format 'tag:index'", key)
+		}
+		tag, err := parseRedeemerPurpose(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid redeemer tag in key %q: %w", key, err)
+		}
+		idx, err := strconv.ParseUint(parts[1], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redeemer index %q in key %q: %w", parts[1], key, err)
+		}
+		rKey := common.RedeemerKey{Tag: tag, Index: uint32(idx)}
+		if budget.Memory > math.MaxInt64 || budget.Steps > math.MaxInt64 {
+			return nil, fmt.Errorf("ExUnits overflow in key %q: memory=%d steps=%d", key, budget.Memory, budget.Steps)
+		}
+		result[rKey] = common.ExUnits{Memory: int64(budget.Memory), Steps: int64(budget.Steps)}
+	}
+	return result, nil
+}
+
+// evalErrorSnippet bounds a response payload for inclusion in error messages.
+func evalErrorSnippet(data []byte) string {
+	const maxSnippet = 512
+	if len(data) > maxSnippet {
+		data = data[:maxSnippet]
+	}
+	return string(data)
 }

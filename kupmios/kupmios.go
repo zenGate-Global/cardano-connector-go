@@ -6,20 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/backend"
 	"github.com/SundaeSwap-finance/kugo"
-	"github.com/SundaeSwap-finance/ogmigo/v6"
+	ogmigo "github.com/SundaeSwap-finance/ogmigo/v6"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync"
-	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/chainsync/num"
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
 	"github.com/gorilla/websocket"
+
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
@@ -43,46 +41,46 @@ func New(config Config) (*KupmiosProvider, error) {
 
 func (kp *KupmiosProvider) GetProtocolParameters(
 	ctx context.Context,
-) (Base.ProtocolParameters, error) {
-	ogmigoPPJson, err := kp.ogmigoClient.CurrentProtocolParameters(ctx)
+) (backend.ProtocolParameters, error) {
+	raw, err := kp.ogmigoClient.CurrentProtocolParameters(ctx)
 	if err != nil {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"kupmios: failed to get current protocol parameters from Ogmios: %w",
 			err,
 		)
 	}
 
-	var ogmiosParams OgmiosProtocolParameters
-	if err := json.Unmarshal(ogmigoPPJson, &ogmiosParams); err != nil {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+	var params ogmiosProtocolParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"kupmios: failed to parse Ogmios protocol parameters JSON: %w",
 			err,
 		)
 	}
 
-	return adaptOgmigoProtocolParamsToConnectorParams(ogmiosParams), nil
+	return params.toProtocolParams()
 }
 
 func (kp *KupmiosProvider) GetGenesisParams(
 	ctx context.Context,
-) (Base.GenesisParameters, error) {
-	shelleyGenesisParams, err := kp.ogmigoClient.GenesisConfig(ctx, "shelley")
+) (backend.GenesisParameters, error) {
+	raw, err := kp.ogmigoClient.GenesisConfig(ctx, "shelley")
 	if err != nil {
-		return Base.GenesisParameters{}, fmt.Errorf(
+		return backend.GenesisParameters{}, fmt.Errorf(
 			"kupmios: failed to get shelley genesis parameters: %w",
 			err,
 		)
 	}
 
-	var shelleyGenesis ShelleyGenesisParams
-	if err := json.Unmarshal(shelleyGenesisParams, &shelleyGenesis); err != nil {
-		return Base.GenesisParameters{}, fmt.Errorf(
+	var genesis ogmiosGenesisConfig
+	if err := json.Unmarshal(raw, &genesis); err != nil {
+		return backend.GenesisParameters{}, fmt.Errorf(
 			"kupmios: failed to parse shelley genesis parameters: %w",
 			err,
 		)
 	}
 
-	return adaptShelleyGenesisToConnectorParams(shelleyGenesis), nil
+	return genesis.toGenesisParams()
 }
 
 func (kp *KupmiosProvider) Network() int {
@@ -94,13 +92,15 @@ func (kp *KupmiosProvider) Epoch(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to get current epoch: %w", err)
 	}
+	if ogmigoEpoch > math.MaxInt {
+		return 0, fmt.Errorf("kupmios: epoch %d exceeds int range", ogmigoEpoch)
+	}
 
 	return int(ogmigoEpoch), nil
 }
 
 func (kp *KupmiosProvider) GetTip(ctx context.Context) (connector.Tip, error) {
-	ogmigoTip, err := kp.ogmigoClient.ChainTip(ctx)
-	fmt.Printf("ogmigoTip: %+v\n", ogmigoTip)
+	point, err := kp.ogmigoClient.ChainTip(ctx)
 	if err != nil {
 		return connector.Tip{}, fmt.Errorf(
 			"kupmios: failed to get tip: %w",
@@ -108,33 +108,46 @@ func (kp *KupmiosProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 		)
 	}
 
-	ogmigoTipStruct, ok := ogmigoTip.PointStruct()
-	if !ok {
-		return connector.Tip{}, fmt.Errorf(
-			"kupmios: failed to get tip: %w",
-			err,
-		)
+	ps, ok := point.PointStruct()
+	if !ok || ps == nil {
+		return connector.Tip{}, errors.New("kupmios: chain tip is origin")
 	}
 
-	ogmigoHeight, err := kp.ogmigoClient.BlockHeight(ctx)
-	if err != nil {
-		return connector.Tip{}, fmt.Errorf(
-			"kupmios: failed to get block height: %w",
-			err,
-		)
+	tip := connector.Tip{
+		Slot: ps.Slot,
+		Hash: ps.ID,
+	}
+	if ps.Height != nil {
+		tip.Height = *ps.Height
+	} else {
+		// ChainTip does not always carry the block height; query it directly.
+		height, err := kp.blockHeight(ctx)
+		if err != nil {
+			return connector.Tip{}, fmt.Errorf(
+				"kupmios: failed to get block height: %w",
+				err,
+			)
+		}
+		tip.Height = height
 	}
 
-	return connector.Tip{
-		Slot:   ogmigoTipStruct.Slot,
-		Height: ogmigoHeight,
-		Hash:   ogmigoTipStruct.ID,
-	}, nil
+	return tip, nil
 }
 
 func (kp *KupmiosProvider) GetUtxosByAddress(
 	ctx context.Context,
 	addr string,
-) ([]UTxO.UTxO, error) {
+) ([]common.Utxo, error) {
+	address, err := common.NewAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: invalid address %q: %s",
+			connector.ErrInvalidAddress,
+			addr,
+			err,
+		)
+	}
+
 	matches, err := kp.kugoClient.Matches(
 		ctx,
 		kugo.OnlyUnspent(),
@@ -149,27 +162,21 @@ func (kp *KupmiosProvider) GetUtxosByAddress(
 	}
 
 	if len(matches) == 0 {
-		return []UTxO.UTxO{}, nil
+		return []common.Utxo{}, nil
 	}
 
-	utxos := make([]UTxO.UTxO, 0, len(matches))
+	utxos := make([]common.Utxo, 0, len(matches))
 	for _, match := range matches {
-		apolloUtxo, err := adaptKupoMatchToApolloUTxO(
-			ctx,
-			kp.kugoClient,
-			match,
-			addr,
-		)
+		utxo, err := matchToUtxo(ctx, match, address, kp.kugoClient)
 		if err != nil {
-			fmt.Printf(
-				"kupmios: warning - failed to adapt kupo match %s#%d: %v\n",
+			return nil, fmt.Errorf(
+				"kupmios: failed to adapt kupo match %s#%d: %w",
 				match.TransactionID,
 				match.OutputIndex,
 				err,
 			)
-			continue
 		}
-		utxos = append(utxos, apolloUtxo)
+		utxos = append(utxos, utxo)
 	}
 	return utxos, nil
 }
@@ -178,7 +185,7 @@ func (kp *KupmiosProvider) GetUtxosWithUnit(
 	ctx context.Context,
 	address string,
 	unit string,
-) ([]UTxO.UTxO, error) {
+) ([]common.Utxo, error) {
 	if address == "" {
 		return nil, fmt.Errorf(
 			"%w: address cannot be empty",
@@ -186,132 +193,50 @@ func (kp *KupmiosProvider) GetUtxosWithUnit(
 		)
 	}
 
-	policyIDFromParse, assetNameFromParse, err := parseUnit(unit)
+	utxos, err := kp.GetUtxosByAddress(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+
+	matcher, err := newUnitMatcher(unit)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"%w: invalid unit format '%s': %s",
+			"%w: invalid unit format %q: %s",
 			connector.ErrInvalidInput,
 			unit,
 			err,
 		)
 	}
 
-	var targetKugoAssetIDForFilter shared.AssetID
-	var mapAccessPolicyID string
-	var mapAccessAssetNameHex string
-
-	if policyIDFromParse == "lovelace" {
-		targetKugoAssetIDForFilter = shared.AssetID("lovelace")
-		mapAccessPolicyID = "lovelace"
-		mapAccessAssetNameHex = ""
-	} else {
-		if assetNameFromParse == "" {
-			return nil, fmt.Errorf("%w: asset name required for native asset unit '%s'", connector.ErrInvalidInput, unit)
+	result := make([]common.Utxo, 0, len(utxos))
+	for _, utxo := range utxos {
+		if matcher.matches(utxo) {
+			result = append(result, utxo)
 		}
-		mapAccessPolicyID = policyIDFromParse
-		mapAccessAssetNameHex = assetNameFromParse
-
-		fullAssetIDStrForKugoFilter := fmt.Sprintf("%s.%s", mapAccessPolicyID, mapAccessAssetNameHex)
-		targetKugoAssetIDForFilter = shared.AssetID(fullAssetIDStrForKugoFilter)
 	}
 
-	filters := []kugo.MatchesFilter{
-		kugo.OnlyUnspent(),
-		kugo.Address(address),
-		kugo.AssetID(targetKugoAssetIDForFilter),
-	}
-
-	matches, err := kp.kugoClient.Matches(ctx, filters...)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"kupmios: Kugo request for UTxOs at address %s with unit %s failed: %w",
-			address,
-			unit,
-			err,
-		)
-	}
-
-	if len(matches) == 0 {
-		return []UTxO.UTxO{}, nil
-	}
-
-	resultUtxos := make([]UTxO.UTxO, 0, len(matches))
-	for _, match := range matches {
-		assetsInPolicy, policyFound := match.Value[mapAccessPolicyID]
-		if !policyFound {
-			continue
-		}
-
-		assetAmount, assetFound := assetsInPolicy[mapAccessAssetNameHex]
-		if !assetFound {
-			continue
-		}
-
-		if assetAmount.BigInt().Sign() <= 0 {
-			continue
-		}
-
-		apolloUtxo, adaptErr := adaptKupoMatchToApolloUTxO(
-			ctx,
-			kp.kugoClient,
-			match,
-			match.Address,
-		)
-		if adaptErr != nil {
-			fmt.Printf(
-				"kupmios: warning - failed to adapt Kupo match %s#%d for GetUtxosWithUnit: %v\n",
-				match.TransactionID,
-				match.OutputIndex,
-				adaptErr,
-			)
-			continue
-		}
-		resultUtxos = append(resultUtxos, apolloUtxo)
-	}
-
-	return resultUtxos, nil
+	return result, nil
 }
 
 func (kp *KupmiosProvider) GetUtxoByUnit(
 	ctx context.Context,
 	unit string,
-) (*UTxO.UTxO, error) {
-	policyIDFromParse, assetNameFromParse, err := parseUnit(unit)
+) (*common.Utxo, error) {
+	matcher, err := newUnitMatcher(unit)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"%w: invalid unit format '%s': %s",
+			"%w: invalid unit format %q: %s",
 			connector.ErrInvalidInput,
 			unit,
 			err,
 		)
 	}
 
-	var targetKugoAssetID shared.AssetID
-	var kugoFilterPolicyIDStr string
-	var kugoFilterAssetNameHexStr string
-
-	if policyIDFromParse == "lovelace" {
-		targetKugoAssetID = shared.AssetID("lovelace")
-		kugoFilterPolicyIDStr = "lovelace"
-		kugoFilterAssetNameHexStr = ""
-	} else {
-		if assetNameFromParse == "" {
-			return nil, fmt.Errorf("%w: asset name cannot be empty for native asset unit '%s'", connector.ErrInvalidInput, unit)
-		}
-		kugoFilterPolicyIDStr = policyIDFromParse
-		kugoFilterAssetNameHexStr = assetNameFromParse
-
-		fullAssetIDStrForKugoFilter := fmt.Sprintf("%s.%s", kugoFilterPolicyIDStr, assetNameFromParse)
-		targetKugoAssetID = shared.AssetID(fullAssetIDStrForKugoFilter)
-	}
-
-	kugoAssetFilter := kugo.AssetID(targetKugoAssetID)
-	filters := []kugo.MatchesFilter{
+	// Kupo can index matches by asset across all addresses.
+	matches, err := kp.kugoClient.Matches(ctx,
 		kugo.OnlyUnspent(),
-		kugoAssetFilter,
-	}
-
-	matches, err := kp.kugoClient.Matches(ctx, filters...)
+		kugo.AssetID(shared.AssetID(matcher.kugoAssetID)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"kupmios: Kupo request for UTxO by unit %s failed: %w",
@@ -320,141 +245,106 @@ func (kp *KupmiosProvider) GetUtxoByUnit(
 		)
 	}
 
-	if len(matches) == 0 {
+	found := make([]common.Utxo, 0, 1)
+	for _, match := range matches {
+		address, err := common.NewAddress(match.Address)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"kupmios: invalid address %q in match %s#%d: %w",
+				match.Address,
+				match.TransactionID,
+				match.OutputIndex,
+				err,
+			)
+		}
+		utxo, err := matchToUtxo(ctx, match, address, kp.kugoClient)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"kupmios: failed to adapt Kupo match for unit %s (tx: %s#%d): %w",
+				unit,
+				match.TransactionID,
+				match.OutputIndex,
+				err,
+			)
+		}
+		if matcher.matches(utxo) {
+			found = append(found, utxo)
+		}
+	}
+
+	if len(found) == 0 {
 		return nil, fmt.Errorf(
 			"%w: no UTxO found for unit %s",
 			connector.ErrNotFound,
 			unit,
 		)
 	}
-	if len(matches) > 1 {
+	if len(found) > 1 {
 		return nil, fmt.Errorf(
 			"%w: multiple UTxOs (%d) found for unit %s, expected a unique instance",
 			connector.ErrMultipleUTXOs,
-			len(matches),
+			len(found),
 			unit,
 		)
 	}
 
-	match := matches[0]
-
-	var assetAmount num.Int
-	var ok bool
-
-	assetsInPolicy, policyFound := match.Value[kugoFilterPolicyIDStr]
-	if !policyFound {
-		return nil, fmt.Errorf(
-			"kupmios: internal error - policy %s not found in matched UTxO %s#%d for unit %s",
-			kugoFilterPolicyIDStr,
-			match.TransactionID,
-			match.OutputIndex,
-			unit,
-		)
-	}
-
-	assetAmount, ok = assetsInPolicy[kugoFilterAssetNameHexStr]
-	if !ok {
-		return nil, fmt.Errorf(
-			"kupmios: internal error - asset %s (hex: %s) not found under policy %s in matched UTxO %s#%d for unit %s",
-			assetNameFromParse,
-			kugoFilterAssetNameHexStr,
-			kugoFilterPolicyIDStr,
-			match.TransactionID,
-			match.OutputIndex,
-			unit,
-		)
-	}
-
-	_ = assetAmount
-
-	// if assetAmount.BigInt().Cmp(big.NewInt(1)) != 0 {
-	// 	// TODO: Handle when quantity is not 1??
-	// }
-
-	apolloUtxo, adaptErr := adaptKupoMatchToApolloUTxO(
-		ctx,
-		kp.kugoClient,
-		match,
-		match.Address,
-	)
-	if adaptErr != nil {
-		return nil, fmt.Errorf(
-			"kupmios: failed to adapt Kupo match for unit %s (tx: %s#%d): %w",
-			unit,
-			match.TransactionID,
-			match.OutputIndex,
-			adaptErr,
-		)
-	}
-
-	return &apolloUtxo, nil
+	return &found[0], nil
 }
 
 func (kp *KupmiosProvider) GetUtxosByOutRef(
 	ctx context.Context,
 	outRefs []connector.OutRef,
-) ([]UTxO.UTxO, error) {
+) ([]common.Utxo, error) {
 	if len(outRefs) == 0 {
-		return []UTxO.UTxO{}, nil
+		return []common.Utxo{}, nil
 	}
 
-	foundUtxosMap := make(map[string]UTxO.UTxO)
-	processedOutRefs := make(map[string]bool)
+	results := make([]common.Utxo, 0, len(outRefs))
+	seen := make(map[string]bool, len(outRefs))
 
 	for _, ref := range outRefs {
-		outRefKey := fmt.Sprintf("%s#%d", ref.TxHash, ref.Index)
-		if _, done := processedOutRefs[outRefKey]; done {
+		key := fmt.Sprintf("%s#%d", ref.TxHash, ref.Index)
+		if seen[key] {
 			continue
 		}
+		seen[key] = true
 
-		matches, err := kp.kugoClient.Matches(ctx,
-			kugo.TxOut(chainsync.NewTxID(ref.TxHash, int(ref.Index))),
-		)
+		query := chainsync.TxInQuery{
+			Transaction: shared.UtxoTxID{ID: ref.TxHash},
+			Index:       ref.Index,
+		}
+		raws, err := kp.ogmigoClient.UtxosByTxIn(ctx, query)
 		if err != nil {
-			fmt.Printf(
-				"kupmios: Kugo request for OutRef %s#%d failed: %v\n",
-				ref.TxHash,
-				ref.Index,
+			return nil, fmt.Errorf(
+				"kupmios: Ogmios UtxosByTxIn for %s failed: %w",
+				key,
 				err,
 			)
-			continue
 		}
 
-		for _, match := range matches {
-			if match.TransactionID == ref.TxHash &&
-				match.OutputIndex == int(ref.Index) {
-				utxoKey := fmt.Sprintf(
-					"%s#%d",
-					match.TransactionID,
-					match.OutputIndex,
-				)
-				if _, exists := foundUtxosMap[utxoKey]; !exists {
-					apolloUtxo, adaptErr := adaptKupoMatchToApolloUTxO(
-						ctx,
-						kp.kugoClient,
-						match,
-						match.Address,
-					)
-					if adaptErr != nil {
-						fmt.Printf(
-							"kupmios: Failed to adapt Kupo match for OutRef %s#%d: %v\n",
-							ref.TxHash,
-							ref.Index,
-							adaptErr,
-						)
-						continue
-					}
-					foundUtxosMap[utxoKey] = apolloUtxo
-				}
-				processedOutRefs[outRefKey] = true
-				break
+		for _, raw := range raws {
+			if raw.Transaction.ID != ref.TxHash || raw.Index != ref.Index {
+				continue
 			}
+			address, err := common.NewAddress(raw.Address)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"kupmios: invalid address %q for OutRef %s: %w",
+					raw.Address,
+					key,
+					err,
+				)
+			}
+			utxo, err := ogmiosUtxoToCommon(raw, address)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"kupmios: failed to adapt Ogmios UTxO for OutRef %s: %w",
+					key,
+					err,
+				)
+			}
+			results = append(results, utxo)
 		}
-	}
-
-	results := make([]UTxO.UTxO, 0, len(foundUtxosMap))
-	for _, utxo := range foundUtxosMap {
-		results = append(results, utxo)
 	}
 
 	return results, nil
@@ -473,7 +363,7 @@ func (kp *KupmiosProvider) GetDelegation(
 		)
 	}
 
-	ogmigoDelegation, err := kp.getDelegation(ctx, addrStr)
+	summaries, err := kp.queryRewardAccountSummaries(ctx, addrStr)
 	if err != nil {
 		return connector.Delegation{}, fmt.Errorf(
 			"kupmios: delegation lookup failed for %s: %w",
@@ -482,44 +372,53 @@ func (kp *KupmiosProvider) GetDelegation(
 		)
 	}
 
-	delegationActive := ogmigoDelegation.PoolID != ""
+	if len(summaries) == 0 {
+		return connector.Delegation{}, nil
+	}
 
-	return connector.Delegation{
-		PoolId:  ogmigoDelegation.PoolID,
-		Rewards: ogmigoDelegation.Rewards.Uint64(),
-		Active:  delegationActive,
-	}, nil
+	summary := summaries[0]
+	delegation := connector.Delegation{}
+	if summary.StakePool != nil && summary.StakePool.ID != "" {
+		delegation.PoolId = summary.StakePool.ID
+	} else if summary.Delegate != nil && summary.Delegate.ID != "" {
+		delegation.PoolId = summary.Delegate.ID
+	}
+	if summary.Rewards != nil {
+		delegation.Rewards = summary.Rewards.AdaLovelace().Uint64()
+	}
+	delegation.Active = delegation.PoolId != ""
+
+	return delegation, nil
 }
 
+// GetOgmiosUtxo queries UTxOs directly via Ogmios by transaction input. It is
+// retained for callers that need the raw ogmigo shared.Utxo wire form.
 func (kp *KupmiosProvider) GetOgmiosUtxo(
 	ctx context.Context,
 	txIns []chainsync.TxInQuery,
 ) ([]shared.Utxo, error) {
-	ogmigoUTxOs, err := kp.ogmigoClient.UtxosByTxIn(ctx, txIns...)
+	utxos, err := kp.ogmigoClient.UtxosByTxIn(ctx, txIns...)
 	if err != nil {
-		return nil, fmt.Errorf("kupmios: Ogmigo GetDelegation failed: %w", err)
+		return nil, fmt.Errorf("kupmios: Ogmios UtxosByTxIn failed: %w", err)
 	}
 
-	return ogmigoUTxOs, nil
+	return utxos, nil
 }
 
 func (kp *KupmiosProvider) GetDatum(
 	ctx context.Context,
 	datumHash string,
-) (PlutusData.PlutusData, error) {
-	datumCBORHex, err := kp.kugoClient.Datum(ctx, string(datumHash))
+) (common.Datum, error) {
+	datumCBORHex, err := kp.kugoClient.Datum(ctx, datumHash)
 	if err != nil {
-		if strings.Contains(
-			err.Error(),
-			"not found",
-		) { // Kupo might return a specific error
-			return PlutusData.PlutusData{}, fmt.Errorf(
+		if strings.Contains(err.Error(), "not found") {
+			return common.Datum{}, fmt.Errorf(
 				"kupmios: datum hash %s not found via Kupo: %w",
 				datumHash,
 				connector.ErrNotFound,
 			)
 		}
-		return PlutusData.PlutusData{}, fmt.Errorf(
+		return common.Datum{}, fmt.Errorf(
 			"kupmios: Kupo request for datum %s failed: %w",
 			datumHash,
 			err,
@@ -527,7 +426,7 @@ func (kp *KupmiosProvider) GetDatum(
 	}
 
 	if datumCBORHex == "" {
-		return PlutusData.PlutusData{}, fmt.Errorf(
+		return common.Datum{}, fmt.Errorf(
 			"kupmios: Kupo returned empty CBOR for datum hash %s: %w",
 			datumHash,
 			connector.ErrNotFound,
@@ -536,21 +435,22 @@ func (kp *KupmiosProvider) GetDatum(
 
 	datumBytes, err := hex.DecodeString(datumCBORHex)
 	if err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
+		return common.Datum{}, fmt.Errorf(
 			"kupmios: invalid datum CBOR hex from Kupo for %s: %w",
 			datumHash,
 			err,
 		)
 	}
-	var pd PlutusData.PlutusData
-	if err := cbor.Unmarshal(datumBytes, &pd); err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
-			"kupmios: failed to unmarshal datum CBOR for %s: %w",
+
+	var datum common.Datum
+	if err := datum.UnmarshalCBOR(datumBytes); err != nil {
+		return common.Datum{}, fmt.Errorf(
+			"kupmios: failed to decode datum CBOR for %s: %w",
 			datumHash,
 			err,
 		)
 	}
-	return pd, nil
+	return datum, nil
 }
 
 type ogmiosRewardAccountSummary struct {
@@ -563,84 +463,29 @@ type ogmiosRewardAccountSummary struct {
 	Rewards *shared.Value `json:"rewards,omitempty"`
 }
 
-func (kp *KupmiosProvider) getDelegation(
-	ctx context.Context,
-	addrStr string,
-) (ogmigo.Delegation, error) {
-	delegation, err := kp.ogmigoClient.GetDelegation(ctx, addrStr)
-	if err == nil {
-		return delegation, nil
-	}
-	if !strings.Contains(
-		err.Error(),
-		"cannot unmarshal array into Go struct field .Result of type map[string]*ogmigo.rewardAccountSummary",
-	) {
-		return ogmigo.Delegation{}, err
-	}
-
-	summaries, queryErr := kp.queryRewardAccountSummaries(ctx, addrStr)
-	if queryErr != nil {
-		return ogmigo.Delegation{}, queryErr
-	}
-	if len(summaries) == 0 {
-		return ogmigo.Delegation{Rewards: num.Int64(0)}, nil
-	}
-
-	summary := summaries[0]
-	delegation = ogmigo.Delegation{Rewards: num.Int64(0)}
-	if summary.StakePool != nil && summary.StakePool.ID != "" {
-		delegation.PoolID = summary.StakePool.ID
-	} else if summary.Delegate != nil && summary.Delegate.ID != "" {
-		delegation.PoolID = summary.Delegate.ID
-	}
-	if summary.Rewards != nil {
-		delegation.Rewards = summary.Rewards.AdaLovelace()
-	}
-	return delegation, nil
-}
-
 func (kp *KupmiosProvider) queryRewardAccountSummaries(
 	ctx context.Context,
 	addrStr string,
 ) ([]ogmiosRewardAccountSummary, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(
-		ctx,
-		kp.ogmiosEndpoint,
-		nil,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ogmios: %w", err)
-	}
-	defer conn.Close()
-
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "queryLedgerState/rewardAccountSummaries",
-		"params": map[string]any{
-			"keys": []string{addrStr},
-		},
-		"id": nil,
-	}
-	if err := conn.WriteJSON(payload); err != nil {
-		return nil, fmt.Errorf("failed to submit Ogmios delegation query: %w", err)
-	}
-
-	var raw json.RawMessage
-	if err := conn.ReadJSON(&raw); err != nil {
-		return nil, fmt.Errorf("failed to read Ogmios delegation response: %w", err)
-	}
-
 	var response struct {
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return nil, fmt.Errorf("failed to decode Ogmios delegation envelope: %w", err)
+	if err := kp.ogmiosRPC(
+		ctx,
+		"queryLedgerState/rewardAccountSummaries",
+		map[string]any{"keys": []string{addrStr}},
+		&response,
+	); err != nil {
+		return nil, err
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("ogmios delegation query failed: %s", response.Error.Message)
+		return nil, fmt.Errorf(
+			"ogmios delegation query failed: %s",
+			response.Error.Message,
+		)
 	}
 
 	var asArray []ogmiosRewardAccountSummary
@@ -666,12 +511,74 @@ func (kp *KupmiosProvider) queryRewardAccountSummaries(
 	return summaries, nil
 }
 
+// blockHeight queries the current network block height over the Ogmios
+// websocket. ChainTip does not always populate the height field.
+func (kp *KupmiosProvider) blockHeight(ctx context.Context) (uint64, error) {
+	var response struct {
+		Result uint64 `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := kp.ogmiosRPC(
+		ctx,
+		"queryNetwork/blockHeight",
+		nil,
+		&response,
+	); err != nil {
+		return 0, err
+	}
+	if response.Error != nil {
+		return 0, fmt.Errorf(
+			"ogmios block height query failed: %s",
+			response.Error.Message,
+		)
+	}
+	return response.Result, nil
+}
+
+// ogmiosRPC issues a single JSON-RPC request over a short-lived Ogmios
+// websocket connection and decodes the response into out.
+func (kp *KupmiosProvider) ogmiosRPC(
+	ctx context.Context,
+	method string,
+	params any,
+	out any,
+) error {
+	conn, _, err := websocket.DefaultDialer.DialContext(
+		ctx,
+		kp.ogmiosEndpoint,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to Ogmios: %w", err)
+	}
+	defer conn.Close()
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"id":      nil,
+	}
+	if params != nil {
+		payload["params"] = params
+	}
+	if err := conn.WriteJSON(payload); err != nil {
+		return fmt.Errorf("failed to submit Ogmios %s query: %w", method, err)
+	}
+
+	if err := conn.ReadJSON(out); err != nil {
+		return fmt.Errorf("failed to read Ogmios %s response: %w", method, err)
+	}
+	return nil
+}
+
 func (kp *KupmiosProvider) AwaitTx(
 	ctx context.Context,
 	txHash string,
 	checkInterval time.Duration,
 ) (bool, error) {
-	if string(txHash) == "" {
+	if txHash == "" {
 		return false, fmt.Errorf(
 			"%w: transaction hash cannot be empty",
 			connector.ErrInvalidInput,
@@ -695,7 +602,7 @@ func (kp *KupmiosProvider) AwaitTx(
 			)
 		case <-ticker.C:
 			matches, err := kp.kugoClient.Matches(ctx,
-				kugo.Transaction(string(txHash)),
+				kugo.Transaction(txHash),
 			)
 			if err != nil {
 				continue
@@ -714,67 +621,61 @@ func (kp *KupmiosProvider) SubmitTx(
 	ctx context.Context,
 	txBytes []byte,
 ) (string, error) {
-	submittedTxID, err := kp.ogmigoClient.SubmitTx(
+	resp, err := kp.ogmigoClient.SubmitTx(
 		ctx,
 		hex.EncodeToString(txBytes),
 	)
-	if err != nil || submittedTxID.Error != nil {
+	if err != nil {
+		return "", fmt.Errorf("kupmios: Ogmios tx submission failed: %w", err)
+	}
+	if resp.Error != nil {
 		return "", fmt.Errorf(
-			"kupmios: Ogmigo tx submission failed: %s",
-			submittedTxID.Error.Message,
+			"kupmios: Ogmios tx submission failed: %s",
+			resp.Error.Message,
 		)
 	}
 
-	return submittedTxID.ID, nil
+	return resp.ID, nil
 }
 
 func (kp *KupmiosProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
-	additionalUTxOs []UTxO.UTxO,
-) (map[string]Redeemer.ExecutionUnits, error) {
+	additionalUTxOs []common.Utxo,
+) (map[common.RedeemerKey]common.ExUnits, error) {
+	txHex := hex.EncodeToString(txBytes)
+
+	var resp *ogmigo.EvaluateTxResponse
+	var err error
 	if len(additionalUTxOs) > 0 {
-
-		ogmigoUTxOs := make([]shared.Utxo, len(additionalUTxOs))
-		for i, utxo := range additionalUTxOs {
-			ogmigoUTxOs[i] = adaptApolloUtxoToOgmigo(utxo)
+		sharedUtxos, convErr := commonUtxosToShared(additionalUTxOs)
+		if convErr != nil {
+			return nil, convErr
 		}
-
-		ogmigoEvalResult, err := kp.ogmigoClient.EvaluateTxWithAdditionalUtxos(
+		resp, err = kp.ogmigoClient.EvaluateTxWithAdditionalUtxos(
 			ctx,
-			hex.EncodeToString(txBytes),
-			ogmigoUTxOs,
+			txHex,
+			sharedUtxos,
 		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"kupmios: Ogmigo tx evaluation failed: %w. Raw Ogmigo Error: %s",
-				connector.ErrEvaluationFailed,
-				err.Error(),
-			)
-		}
-		return adaptOgmigoEvalResult(ogmigoEvalResult)
+	} else {
+		resp, err = kp.ogmigoClient.EvaluateTx(ctx, txHex)
 	}
-
-	ogmigoEvalResult, err := kp.ogmigoClient.EvaluateTx(
-		ctx,
-		hex.EncodeToString(txBytes),
-	)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"kupmios: Ogmigo tx evaluation failed: %w. Raw Ogmigo Error: %s",
+			"kupmios: Ogmios tx evaluation failed: %w. Raw Ogmios Error: %s",
 			connector.ErrEvaluationFailed,
 			err.Error(),
 		)
 	}
 
-	return adaptOgmigoEvalResult(ogmigoEvalResult)
+	return evaluateResponseToExUnits(resp)
 }
 
 func (kp *KupmiosProvider) GetScriptCborByScriptHash(
 	ctx context.Context,
 	scriptHash string,
 ) (string, error) {
-	scriptCbor, err := kp.kugoClient.Script(ctx, scriptHash)
+	script, err := kp.kugoClient.Script(ctx, scriptHash)
 	if err != nil {
 		return "", fmt.Errorf(
 			"kupmios: Kupo request for script %s failed: %w",
@@ -782,7 +683,7 @@ func (kp *KupmiosProvider) GetScriptCborByScriptHash(
 			err,
 		)
 	}
-	if scriptCbor == nil || scriptCbor.Script == "" {
+	if script == nil || script.Script == "" {
 		return "", fmt.Errorf(
 			"kupmios: script not found for hash %s: %w",
 			scriptHash,
@@ -790,31 +691,51 @@ func (kp *KupmiosProvider) GetScriptCborByScriptHash(
 		)
 	}
 
-	return scriptCbor.Script, nil
+	return script.Script, nil
 }
 
-func parseUnit(
-	unitStr string,
-) (policyID string, assetNameHex string, err error) {
-	if unitStr == "lovelace" {
-		return "lovelace", "", nil
+// unitMatcher filters common.Utxo values by an asset unit. The unit is either
+// "lovelace" or a concatenation of the 56-hex policy ID and the asset name hex.
+type unitMatcher struct {
+	lovelace    bool
+	policyId    common.Blake2b224
+	assetName   []byte
+	kugoAssetID string
+}
+
+func newUnitMatcher(unit string) (unitMatcher, error) {
+	if unit == "lovelace" {
+		return unitMatcher{lovelace: true, kugoAssetID: "lovelace"}, nil
 	}
-	parts := strings.SplitN(unitStr, ".", 2)
-	if len(parts) == 2 {
-		policyID = parts[0]
-		assetNameHex = parts[1]
-		if len(policyID) != 56 {
-			return "", "", errors.New("invalid policyId length in unit")
-		}
-		return policyID, assetNameHex, nil
-	} else if len(parts) == 1 && len(parts[0]) == 56 {
-		return parts[0], "", nil
-	} else if len(parts) == 1 && len(parts[0]) >= 56 {
-		policyID = parts[0][:56]
-		assetNameHex = parts[0][56:]
-		return policyID, assetNameHex, nil
+
+	policyId, assetName, err := backend.ParseAssetUnit(unit)
+	if err != nil {
+		return unitMatcher{}, err
 	}
-	return "", "", errors.New(
-		"invalid unit format, expected 'policy.assetNameHex' or 'lovelace'",
-	)
+
+	nameHex := hex.EncodeToString(assetName.Bytes())
+	kugoAssetID := hex.EncodeToString(policyId.Bytes())
+	if nameHex != "" {
+		kugoAssetID = kugoAssetID + "." + nameHex
+	}
+
+	return unitMatcher{
+		policyId:    policyId,
+		assetName:   assetName.Bytes(),
+		kugoAssetID: kugoAssetID,
+	}, nil
+}
+
+func (m unitMatcher) matches(utxo common.Utxo) bool {
+	out := utxo.Output
+	if m.lovelace {
+		return out.Amount().Sign() > 0
+	}
+
+	assets := out.Assets()
+	if assets == nil {
+		return false
+	}
+	qty := assets.Asset(m.policyId, m.assetName)
+	return qty != nil && qty.Sign() > 0
 }

@@ -4,10 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
 )
 
 type OutRef struct {
@@ -22,12 +20,6 @@ type Delegation struct {
 	Epoch   int    `json:"epoch,omitempty"`
 }
 
-type EvalRedeemer struct {
-	Tag     Redeemer.RedeemerTag    `json:"tag"`
-	Index   uint32                  `json:"index"`
-	ExUnits Redeemer.ExecutionUnits `json:"ex_units"`
-}
-
 type Tip struct {
 	Slot   uint64 `json:"slot"`
 	Height uint64 `json:"height"`
@@ -36,10 +28,10 @@ type Tip struct {
 
 type Provider interface {
 	// GetProtocolParameters fetches the current protocol parameters.
-	GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error)
+	GetProtocolParameters(ctx context.Context) (backend.ProtocolParameters, error)
 
 	// GetGenesisParams fetches the genesis parameters.
-	GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error)
+	GetGenesisParams(ctx context.Context) (backend.GenesisParameters, error)
 
 	// Network returns the network id.
 	Network() int
@@ -51,21 +43,21 @@ type Provider interface {
 	GetTip(ctx context.Context) (Tip, error)
 
 	// GetUtxosByAddress queries UTxOs by a Bech32 address.
-	GetUtxosByAddress(ctx context.Context, addr string) ([]UTxO.UTxO, error)
+	GetUtxosByAddress(ctx context.Context, addr string) ([]common.Utxo, error)
 
 	// GetUtxosWithUnit queries UTxOs by address, filtered by a specific asset unit.
 	GetUtxosWithUnit(
 		ctx context.Context,
 		addr string,
 		unit string,
-	) ([]UTxO.UTxO, error)
+	) ([]common.Utxo, error)
 
 	// GetUtxoByUnit queries a UTxO by a specific unit (NFT or fungible token if entire supply is in one UTxO).
 	// Returns (nil, nil) if not found but no other error occurred.
-	GetUtxoByUnit(ctx context.Context, unit string) (*UTxO.UTxO, error)
+	GetUtxoByUnit(ctx context.Context, unit string) (*common.Utxo, error)
 
 	// GetUtxosByOutRef queries UTxOs by their output references.
-	GetUtxosByOutRef(ctx context.Context, outRefs []OutRef) ([]UTxO.UTxO, error)
+	GetUtxosByOutRef(ctx context.Context, outRefs []OutRef) ([]common.Utxo, error)
 
 	// GetDelegation fetches delegation information for a reward address.
 	GetDelegation(
@@ -73,11 +65,11 @@ type Provider interface {
 		rewardAddress string,
 	) (Delegation, error)
 
-	// GetDatum fetches a datum by its hash. Returns the datum as PlutusData.
+	// GetDatum fetches a datum by its hash. Returns the datum as a gouroboros Datum.
 	GetDatum(
 		ctx context.Context,
 		datumHash string,
-	) (PlutusData.PlutusData, error)
+	) (common.Datum, error)
 
 	// AwaitTx waits for a transaction to be confirmed on the blockchain.
 	// checkInterval specifies how often to check (e.g., 5*time.Second).
@@ -91,13 +83,17 @@ type Provider interface {
 	// SubmitTx submits a signed transaction to the network.
 	SubmitTx(ctx context.Context, tx []byte) (string, error)
 
-	// EvaluateTx evaluates a transaction's scripts and returns the execution units.
-	// additionalUTxOs can be provided for inputs not yet on-chain.
+	// EvaluateTx evaluates a transaction's scripts and returns the execution units,
+	// keyed by redeemer (tag + index).
+	// additionalUTxOs can be provided for inputs not yet on-chain; only the
+	// ogmios (kupmios) and blockfrost backends honor them. The maestro and
+	// utxorpc backends IGNORE additionalUTxOs and can only evaluate transactions
+	// whose inputs are already visible on-chain.
 	EvaluateTx(
 		ctx context.Context,
 		tx []byte,
-		additionalUTxOs []UTxO.UTxO,
-	) (map[string]Redeemer.ExecutionUnits, error)
+		additionalUTxOs []common.Utxo,
+	) (map[common.RedeemerKey]common.ExUnits, error)
 
 	// GetScriptCborByScriptHash fetches the CBOR representation of a script by its hash.
 	GetScriptCborByScriptHash(

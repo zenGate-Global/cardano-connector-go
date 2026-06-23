@@ -1,11 +1,8 @@
 package blockfrost
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
-
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
 )
 
 type BlockfrostProvider struct {
@@ -17,18 +14,22 @@ type BlockfrostProvider struct {
 	customSubmissionEndpoints []string
 }
 
-type bfEvalResult struct {
-	Result map[string]bfExecutionUnits `json:"EvaluationResult"`
-}
+// --- BlockFrost evaluate-with-utxos request types ---
+//
+// /utils/txs/evaluate/utxos proxies Ogmios, so the additionalUtxoSet uses the
+// Ogmios-v5 [txIn, txOut] schema. The value is {coins, assets}; a bare datum
+// hash is "datumHash"; reference scripts are
+// {"plutus:v1"|"plutus:v2"|"plutus:v3"|"plutus:v4": "<base16 script>"}.
 
-// Updated structures to match the correct Blockfrost API format
 type bfTxIn struct {
-	TxId  string `json:"txId"`  // Changed from txHash to txId
-	Index int    `json:"index"` // Changed from outputIndex to index
+	TxId  string `json:"txId"`
+	Index int    `json:"index"`
 }
 
 type bfValue struct {
-	Coins  int64            `json:"coins"`
+	Coins int64 `json:"coins"`
+	// Assets key is the policy ID hex for the empty asset name, otherwise
+	// policyHex + "." + assetNameHex.
 	Assets map[string]int64 `json:"assets,omitempty"`
 }
 
@@ -36,22 +37,21 @@ type bfScriptRef struct {
 	PlutusV1 *string `json:"plutus:v1,omitempty"`
 	PlutusV2 *string `json:"plutus:v2,omitempty"`
 	PlutusV3 *string `json:"plutus:v3,omitempty"`
+	PlutusV4 *string `json:"plutus:v4,omitempty"`
 }
 
 type bfTxOut struct {
-	Address   string       `json:"address"`
-	Value     bfValue      `json:"value"` // Changed from Amount to Value
+	Address string  `json:"address"`
+	Value   bfValue `json:"value"`
+	// DatumHash uses the Ogmios-v5 camelCase key "datumHash" (a bare datum hash
+	// digest); inline datums go under "datum".
 	DatumHash *string      `json:"datumHash,omitempty"`
 	Datum     *string      `json:"datum,omitempty"`
 	ScriptRef *bfScriptRef `json:"script,omitempty"`
 }
 
+// bfAdditionalUtxoItem is a [txIn, txOut] pair.
 type bfAdditionalUtxoItem [2]interface{}
-
-type bfExecutionUnits struct {
-	Memory int `json:"memory"`
-	Steps  int `json:"steps"`
-}
 
 type bfEvalRequest struct {
 	Cbor              string                 `json:"cbor"`
@@ -60,44 +60,6 @@ type bfEvalRequest struct {
 
 type bfScriptCbor struct {
 	ScriptCbor string `json:"cbor"`
-}
-
-type orderedIntMap struct {
-	order  []string
-	values map[string]int64
-}
-
-func (m *orderedIntMap) UnmarshalJSON(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok || delim != '{' {
-		return nil
-	}
-
-	m.order = m.order[:0]
-	m.values = make(map[string]int64)
-	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		key, ok := keyToken.(string)
-		if !ok {
-			return nil
-		}
-		var value int64
-		if err := decoder.Decode(&value); err != nil {
-			return err
-		}
-		m.order = append(m.order, key)
-		m.values[key] = value
-	}
-	_, err = decoder.Token()
-	return err
 }
 
 type Config struct {
@@ -123,71 +85,78 @@ type BlockfrostAccountDetails struct {
 	DeRepId            *string `json:"derep_id"`            // Nullable; this is the delegation target
 }
 
-// BlockfrostProtocolParameters represents the protocol parameters response from Blockfrost API
-type BlockfrostProtocolParameters struct {
-	MinFeeConstant                   int                      `json:"min_fee_b"`
-	MinFeeCoefficient                int                      `json:"min_fee_a"`
-	MaxBlockSize                     int                      `json:"max_block_size"`
-	MaxTxSize                        int                      `json:"max_tx_size"`
-	MaxBlockHeaderSize               int                      `json:"max_block_header_size"`
-	KeyDeposits                      string                   `json:"key_deposit"`
-	PoolDeposits                     string                   `json:"pool_deposit"`
-	PooolInfluence                   float32                  `json:"a0"`
-	MonetaryExpansion                float32                  `json:"rho"`
-	TreasuryExpansion                float32                  `json:"tau"`
-	DecentralizationParam            float32                  `json:"decentralisation_param"`
-	ExtraEntropy                     string                   `json:"extra_entropy"`
-	ProtocolMajorVersion             int                      `json:"protocol_major_ver"`
-	ProtocolMinorVersion             int                      `json:"protocol_minor_ver"`
-	MinUtxo                          string                   `json:"min_utxo"`
-	MinPoolCost                      string                   `json:"min_pool_cost"`
-	PriceMem                         float32                  `json:"price_mem"`
-	PriceStep                        float32                  `json:"price_step"`
-	MaxTxExMem                       string                   `json:"max_tx_ex_mem"`
-	MaxTxExSteps                     string                   `json:"max_tx_ex_steps"`
-	MaxBlockExMem                    string                   `json:"max_block_ex_mem"`
-	MaxBlockExSteps                  string                   `json:"max_block_ex_steps"`
-	MaxValSize                       string                   `json:"max_val_size"`
-	CollateralPercent                int                      `json:"collateral_percent"`
-	MaxCollateralInuts               int                      `json:"max_collateral_inputs"`
-	CoinsPerUtxoWord                 string                   `json:"coins_per_utxo_word"`
-	CoinsPerUtxoByte                 string                   `json:"coins_per_utxo_byte"`
-	CostModels                       map[string]orderedIntMap `json:"cost_models"`
-	MaximumReferenceScriptsSize      int                      `json:"maximum_reference_scripts_size"`
-	MinFeeReferenceScriptsRange      int                      `json:"min_fee_reference_scripts_range"`
-	MinFeeReferenceScriptsBase       int                      `json:"min_fee_reference_scripts_base"`
-	MinFeeReferenceScriptsMultiplier int                      `json:"min_fee_reference_scripts_multiplier"`
+// bfProtocolParams is the BlockFrost /epochs/latest/parameters response.
+type bfProtocolParams struct {
+	MinFeeA            int64   `json:"min_fee_a"`
+	MinFeeB            int64   `json:"min_fee_b"`
+	MaxBlockSize       int64   `json:"max_block_size"`
+	MaxTxSize          int64   `json:"max_tx_size"`
+	MaxBlockHeaderSize int64   `json:"max_block_header_size"`
+	KeyDeposit         string  `json:"key_deposit"`
+	PoolDeposit        string  `json:"pool_deposit"`
+	A0                 float64 `json:"a0"`
+	Rho                float64 `json:"rho"`
+	Tau                float64 `json:"tau"`
+	Decentralisation   float64 `json:"decentralisation_param"`
+	ExtraEntropy       string  `json:"extra_entropy"`
+	ProtocolMajorVer   int     `json:"protocol_major_ver"`
+	ProtocolMinorVer   int     `json:"protocol_minor_ver"`
+	MinUtxo            string  `json:"min_utxo"`
+	MinPoolCost        string  `json:"min_pool_cost"`
+	PriceMem           float64 `json:"price_mem"`
+	PriceStep          float64 `json:"price_step"`
+	// The execution-unit fields use BlockFrost's actual
+	// /epochs/latest/parameters JSON field names (short forms:
+	// max_tx_ex_mem, max_tx_ex_steps, max_block_ex_mem, max_block_ex_steps).
+	// The live BlockFrost API returns exactly these keys; do not switch to the
+	// long forms (e.g. max_tx_execution_units_memory), which unmarshal empty.
+	MaxTxExMem        string          `json:"max_tx_ex_mem"`
+	MaxTxExSteps      string          `json:"max_tx_ex_steps"`
+	MaxBlockExMem     string          `json:"max_block_ex_mem"`
+	MaxBlockExSteps   string          `json:"max_block_ex_steps"`
+	MaxValSize        string          `json:"max_val_size"`
+	CollateralPercent int64           `json:"collateral_percent"`
+	MaxCollateralIn   int64           `json:"max_collateral_inputs"`
+	CoinsPerUtxoWord  string          `json:"coins_per_utxo_word"`
+	CoinsPerUtxoSize  string          `json:"coins_per_utxo_size"`
+	CostModels        json.RawMessage `json:"cost_models"`
+
+	MaximumReferenceScriptsSize      int `json:"maximum_reference_scripts_size"`
+	MinFeeReferenceScriptsRange      int `json:"min_fee_reference_scripts_range"`
+	MinFeeReferenceScriptsBase       int `json:"min_fee_reference_scripts_base"`
+	MinFeeReferenceScriptsMultiplier int `json:"min_fee_reference_scripts_multiplier"`
 }
 
-type BlockfrostGenesisParameters struct {
-	ActiveSlotsCoefficient float32 `json:"active_slots_coefficient"`
+type bfGenesisParams struct {
+	ActiveSlotsCoefficient float64 `json:"active_slots_coefficient"`
 	UpdateQuorum           int     `json:"update_quorum"`
-	MaxLovelaceSupply      string  `json:"max_lovelace_supply"`
 	NetworkMagic           int     `json:"network_magic"`
 	EpochLength            int     `json:"epoch_length"`
-	SystemStart            int     `json:"system_start"`
-	SlotsPerKesPeriod      int     `json:"slots_per_kes_period"`
+	MaxLovelaceSupply      int64   `json:"max_lovelace_supply,string"`
+	SystemStart            int64   `json:"system_start"`
 	SlotLength             int     `json:"slot_length"`
+	SlotsPerKesPeriod      int     `json:"slots_per_kes_period"`
 	MaxKesEvolutions       int     `json:"max_kes_evolutions"`
 	SecurityParam          int     `json:"security_param"`
 }
 
-type BlockfrostUTXO struct {
-	// Transaction hash of the UTXO
-	Address string `json:"address"`
-	TxHash  string `json:"tx_hash"`
+// bfAddressUTxO is a UTxO as returned by /addresses/{addr}/utxos and
+// /txs/{hash}/utxos. InlineDatum is kept as raw JSON so the original CBOR bytes
+// are preserved exactly (no JSON decode/re-encode round-trip).
+type bfAddressUTxO struct {
+	Address             string            `json:"address"`
+	TxHash              string            `json:"tx_hash"`
+	OutputIndex         int               `json:"output_index"`
+	Amount              []bfAddressAmount `json:"amount"`
+	Block               string            `json:"block"`
+	DataHash            string            `json:"data_hash"`
+	InlineDatum         json.RawMessage   `json:"inline_datum"`
+	ReferenceScriptHash string            `json:"reference_script_hash"`
+}
 
-	// UTXO index in the transaction
-	OutputIndex int                  `json:"output_index"`
-	Amount      []Base.AddressAmount `json:"amount"`
-
-	// Block hash of the UTXO
-	Block string `json:"block"`
-
-	// The hash of the transaction output datum
-	DataHash            string `json:"data_hash"`
-	InlineDatum         string `json:"inline_datum"`
-	ReferenceScriptHash string `json:"reference_script_hash"`
+type bfAddressAmount struct {
+	Unit     string `json:"unit"`
+	Quantity string `json:"quantity"`
 }
 
 type BlockfrostEpoch struct {

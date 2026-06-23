@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Salvionied/apollo/constants"
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/Salvionied/apollo/v2/constants"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
+	lcommon "github.com/blinklabs-io/gouroboros/ledger/common"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	"github.com/zenGate-Global/cardano-connector-go/blockfrost"
 	fixture "github.com/zenGate-Global/cardano-connector-go/tests"
@@ -26,39 +25,39 @@ type stubProvider struct {
 	epochErr         error
 	tip              connector.Tip
 	tipErr           error
-	protocolParams   Base.ProtocolParameters
+	protocolParams   backend.ProtocolParameters
 	protocolErr      error
-	genesisParams    Base.GenesisParameters
+	genesisParams    backend.GenesisParameters
 	genesisErr       error
-	utxosByAddress   []UTxO.UTxO
+	utxosByAddress   []lcommon.Utxo
 	utxosAddrErr     error
-	utxosWithUnit    []UTxO.UTxO
+	utxosWithUnit    []lcommon.Utxo
 	utxosWithUnitErr error
-	utxoByUnit       *UTxO.UTxO
+	utxoByUnit       *lcommon.Utxo
 	utxoByUnitErr    error
-	outRefsResult    []UTxO.UTxO
+	outRefsResult    []lcommon.Utxo
 	outRefsErr       error
 	outRefsCalls     int
 	lastOutRefs      []connector.OutRef
 	delegation       connector.Delegation
 	delegationErr    error
-	datum            PlutusData.PlutusData
+	datum            lcommon.Datum
 	datumErr         error
 	awaitResult      bool
 	awaitErr         error
 	submitHash       string
 	submitErr        error
-	evalResult       map[string]Redeemer.ExecutionUnits
+	evalResult       map[lcommon.RedeemerKey]lcommon.ExUnits
 	evalErr          error
 	scriptCbor       string
 	scriptErr        error
 }
 
-func (s *stubProvider) GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error) {
+func (s *stubProvider) GetProtocolParameters(ctx context.Context) (backend.ProtocolParameters, error) {
 	return s.protocolParams, s.protocolErr
 }
 
-func (s *stubProvider) GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error) {
+func (s *stubProvider) GetGenesisParams(ctx context.Context) (backend.GenesisParameters, error) {
 	return s.genesisParams, s.genesisErr
 }
 
@@ -74,19 +73,19 @@ func (s *stubProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 	return s.tip, s.tipErr
 }
 
-func (s *stubProvider) GetUtxosByAddress(ctx context.Context, addr string) ([]UTxO.UTxO, error) {
+func (s *stubProvider) GetUtxosByAddress(ctx context.Context, addr string) ([]lcommon.Utxo, error) {
 	return s.utxosByAddress, s.utxosAddrErr
 }
 
-func (s *stubProvider) GetUtxosWithUnit(ctx context.Context, addr string, unit string) ([]UTxO.UTxO, error) {
+func (s *stubProvider) GetUtxosWithUnit(ctx context.Context, addr string, unit string) ([]lcommon.Utxo, error) {
 	return s.utxosWithUnit, s.utxosWithUnitErr
 }
 
-func (s *stubProvider) GetUtxoByUnit(ctx context.Context, unit string) (*UTxO.UTxO, error) {
+func (s *stubProvider) GetUtxoByUnit(ctx context.Context, unit string) (*lcommon.Utxo, error) {
 	return s.utxoByUnit, s.utxoByUnitErr
 }
 
-func (s *stubProvider) GetUtxosByOutRef(ctx context.Context, outRefs []connector.OutRef) ([]UTxO.UTxO, error) {
+func (s *stubProvider) GetUtxosByOutRef(ctx context.Context, outRefs []connector.OutRef) ([]lcommon.Utxo, error) {
 	s.outRefsCalls++
 	s.lastOutRefs = append([]connector.OutRef(nil), outRefs...)
 	return s.outRefsResult, s.outRefsErr
@@ -96,7 +95,7 @@ func (s *stubProvider) GetDelegation(ctx context.Context, rewardAddress string) 
 	return s.delegation, s.delegationErr
 }
 
-func (s *stubProvider) GetDatum(ctx context.Context, datumHash string) (PlutusData.PlutusData, error) {
+func (s *stubProvider) GetDatum(ctx context.Context, datumHash string) (lcommon.Datum, error) {
 	return s.datum, s.datumErr
 }
 
@@ -108,7 +107,7 @@ func (s *stubProvider) SubmitTx(ctx context.Context, tx []byte) (string, error) 
 	return s.submitHash, s.submitErr
 }
 
-func (s *stubProvider) EvaluateTx(ctx context.Context, tx []byte, additionalUTxOs []UTxO.UTxO) (map[string]Redeemer.ExecutionUnits, error) {
+func (s *stubProvider) EvaluateTx(ctx context.Context, tx []byte, additionalUTxOs []lcommon.Utxo) (map[lcommon.RedeemerKey]lcommon.ExUnits, error) {
 	return s.evalResult, s.evalErr
 }
 
@@ -120,14 +119,14 @@ type retryProvider struct {
 	connector.Provider
 }
 
-func (r *retryProvider) GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error) {
-	return retryLookup(ctx, func(callCtx context.Context) (Base.ProtocolParameters, error) {
+func (r *retryProvider) GetProtocolParameters(ctx context.Context) (backend.ProtocolParameters, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (backend.ProtocolParameters, error) {
 		return r.Provider.GetProtocolParameters(callCtx)
 	})
 }
 
-func (r *retryProvider) GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error) {
-	return retryLookup(ctx, func(callCtx context.Context) (Base.GenesisParameters, error) {
+func (r *retryProvider) GetGenesisParams(ctx context.Context) (backend.GenesisParameters, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (backend.GenesisParameters, error) {
 		return r.Provider.GetGenesisParams(callCtx)
 	})
 }
@@ -138,8 +137,8 @@ func (r *retryProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 	})
 }
 
-func (r *retryProvider) GetDatum(ctx context.Context, datumHash string) (PlutusData.PlutusData, error) {
-	return retryLookup(ctx, func(callCtx context.Context) (PlutusData.PlutusData, error) {
+func (r *retryProvider) GetDatum(ctx context.Context, datumHash string) (lcommon.Datum, error) {
+	return retryLookup(ctx, func(callCtx context.Context) (lcommon.Datum, error) {
 		return r.Provider.GetDatum(callCtx, datumHash)
 	})
 }
@@ -217,11 +216,11 @@ func TestWrap(t *testing.T) {
 
 func TestOverridesBeatWrappedProvider(t *testing.T) {
 	provider := &stubProvider{
-		protocolParams: Base.ProtocolParameters{ProtocolMajorVersion: 10},
-		genesisParams:  Base.GenesisParameters{SystemStart: 1},
+		protocolParams: backend.ProtocolParameters{ProtocolMajorVersion: 10},
+		genesisParams:  backend.GenesisParameters{SystemStart: 1},
 	}
-	protocolOverride := &Base.ProtocolParameters{ProtocolMajorVersion: 99}
-	genesisOverride := &Base.GenesisParameters{SystemStart: 42}
+	protocolOverride := &backend.ProtocolParameters{ProtocolMajorVersion: 99}
+	genesisOverride := &backend.GenesisParameters{SystemStart: 42}
 
 	localEval, err := New(Config{
 		Provider:               provider,
@@ -318,16 +317,36 @@ func TestEvaluateTxUsesWrappedProviderForInputResolution(t *testing.T) {
 	}
 }
 
-func TestApolloUtxoToLedgerFallsBackWithoutScriptRef(t *testing.T) {
-	converted, err := apolloUtxoToLedger(fixture.ApolloDiscoveryUTxO)
-	if err != nil {
-		t.Fatalf("apolloUtxoToLedger failed: %v", err)
+// TestReferenceScriptSurvivesResolverPath asserts that a reference script
+// carried on a resolved input's output (gouroboros common.Utxo) is found by the
+// evaluator's script-resolution path. This replaces the old apollo v1
+// apolloUtxoToLedger bridge test: in apollo v2 the resolver returns
+// common.Utxo values directly, so the assertion is that the script ref survives
+// intact and is matched by its hash.
+func TestReferenceScriptSurvivesResolverPath(t *testing.T) {
+	utxo := fixture.ApolloDiscoveryUTxO
+
+	script := utxo.Output.ScriptRef()
+	if script == nil {
+		t.Fatal("fixture discovery UTxO must carry a reference script")
 	}
-	if converted.Output == nil {
-		t.Fatal("expected converted output")
+	scriptHash := script.Hash().String()
+
+	resolved, ok := findScriptInResolvedInputs([]lcommon.Utxo{utxo}, scriptHash)
+	if !ok {
+		t.Fatalf("reference script %s was not found in resolved inputs", scriptHash)
 	}
-	if converted.Output.ScriptRef() != nil {
-		t.Fatal("expected script ref to be stripped during fallback conversion")
+	if resolved.version != scriptVersionV2 {
+		t.Fatalf("expected PlutusV2 reference script, got version %v", resolved.version)
+	}
+
+	// A resolved input without a script ref must be skipped, not matched.
+	noScript := utxo
+	outNoScript := *utxo.Output.(*babbage.BabbageTransactionOutput)
+	outNoScript.TxOutScriptRef = nil
+	noScript.Output = &outNoScript
+	if _, ok := findScriptInResolvedInputs([]lcommon.Utxo{noScript}, scriptHash); ok {
+		t.Fatal("expected no match when the resolved input carries no script ref")
 	}
 }
 
@@ -411,8 +430,8 @@ func evaluateTxOrSkipIfResolverMissing(
 	ctx context.Context,
 	localEval *PlutigoProvider,
 	txBytes []byte,
-	additionalUTxOs []UTxO.UTxO,
-) map[string]Redeemer.ExecutionUnits {
+	additionalUTxOs []lcommon.Utxo,
+) map[lcommon.RedeemerKey]lcommon.ExUnits {
 	t.Helper()
 
 	redeemers, err := localEval.EvaluateTx(ctx, txBytes, additionalUTxOs)

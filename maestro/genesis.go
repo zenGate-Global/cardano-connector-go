@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
+	"github.com/Salvionied/apollo/v2/backend"
 )
 
-var genesisPresetsByNetwork = map[string]Base.GenesisParameters{
+var genesisPresetsByNetwork = map[string]backend.GenesisParameters{
 	"mainnet": {
 		ActiveSlotsCoefficient: 0.05,
 		UpdateQuorum:           5,
@@ -46,14 +46,14 @@ var genesisPresetsByNetwork = map[string]Base.GenesisParameters{
 	},
 }
 
-func resolveGenesisParams(config Config, networkName string) (Base.GenesisParameters, error) {
+func resolveGenesisParams(config Config, networkName string) (backend.GenesisParameters, error) {
 	if config.GenesisParamsOverride != nil {
 		return *config.GenesisParamsOverride, nil
 	}
 
 	preset, ok := genesisPresetsByNetwork[strings.ToLower(networkName)]
 	if !ok {
-		return Base.GenesisParameters{}, fmt.Errorf(
+		return backend.GenesisParameters{}, fmt.Errorf(
 			"unsupported or missing network name: %s",
 			config.NetworkName,
 		)

@@ -1,12 +1,12 @@
 package utxorpc
 
-import "github.com/Salvionied/apollo/txBuilding/Backend/Base"
+import "github.com/Salvionied/apollo/v2/backend"
 
 // These scalar defaults were fetched from Blockfrost /epochs/latest/parameters
 // for mainnet, preprod, and preview on 2026-03-10. uTxoRPC still supplies live
 // protocol parameters and cost models; this preset only fills fields that may
 // be missing or zeroed in the current gateway response.
-var protocolParamsPreset = Base.ProtocolParameters{
+var protocolParamsPreset = backend.ProtocolParameters{
 	MinFeeConstant:                   155381,
 	MinFeeCoefficient:                44,
 	MaxBlockSize:                     90112,
@@ -14,7 +14,7 @@ var protocolParamsPreset = Base.ProtocolParameters{
 	MaxBlockHeaderSize:               1100,
 	KeyDeposits:                      "2000000",
 	PoolDeposits:                     "500000000",
-	PooolInfluence:                   0.3,
+	PoolInfluence:                    0.3,
 	MonetaryExpansion:                0.003,
 	TreasuryExpansion:                0.2,
 	DecentralizationParam:            0,
@@ -31,7 +31,7 @@ var protocolParamsPreset = Base.ProtocolParameters{
 	MaxBlockExSteps:                  "20000000000",
 	MaxValSize:                       "5000",
 	CollateralPercent:                150,
-	MaxCollateralInuts:               3,
+	MaxCollateralInputs:              3,
 	CoinsPerUtxoWord:                 "4310",
 	CoinsPerUtxoByte:                 "4310",
 	MaximumReferenceScriptsSize:      0,
@@ -41,9 +41,9 @@ var protocolParamsPreset = Base.ProtocolParameters{
 }
 
 func mergeProtocolParamsWithPreset(
-	current Base.ProtocolParameters,
-	preset Base.ProtocolParameters,
-) Base.ProtocolParameters {
+	current backend.ProtocolParameters,
+	preset backend.ProtocolParameters,
+) backend.ProtocolParameters {
 	if current.MinFeeConstant == 0 {
 		current.MinFeeConstant = preset.MinFeeConstant
 	}
@@ -65,8 +65,8 @@ func mergeProtocolParamsWithPreset(
 	if current.PoolDeposits == "" {
 		current.PoolDeposits = preset.PoolDeposits
 	}
-	if current.PooolInfluence == 0 {
-		current.PooolInfluence = preset.PooolInfluence
+	if current.PoolInfluence == 0 {
+		current.PoolInfluence = preset.PoolInfluence
 	}
 	if current.MonetaryExpansion == 0 {
 		current.MonetaryExpansion = preset.MonetaryExpansion
@@ -112,8 +112,8 @@ func mergeProtocolParamsWithPreset(
 	if current.CollateralPercent == 0 {
 		current.CollateralPercent = preset.CollateralPercent
 	}
-	if current.MaxCollateralInuts == 0 {
-		current.MaxCollateralInuts = preset.MaxCollateralInuts
+	if current.MaxCollateralInputs == 0 {
+		current.MaxCollateralInputs = preset.MaxCollateralInputs
 	}
 	if current.CoinsPerUtxoByte == "" || current.CoinsPerUtxoByte == "0" {
 		current.CoinsPerUtxoByte = preset.CoinsPerUtxoByte

@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Salvionied/apollo/constants"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/constants"
 	"github.com/tj/assert"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 	tests "github.com/zenGate-Global/cardano-connector-go/tests"
@@ -70,7 +69,7 @@ func TestGetGenesisParams(t *testing.T) {
 
 	assert.Equal(
 		t,
-		float32(0.05),
+		0.05,
 		gp.ActiveSlotsCoefficient,
 		"ActiveSlotsCoefficient should be 0.05",
 	)
@@ -85,7 +84,7 @@ func TestGetGenesisParams(t *testing.T) {
 	assert.Equal(t, 432000, gp.EpochLength, "EpochLength should be 432000")
 	assert.Equal(
 		t,
-		1654041600,
+		int64(1654041600),
 		gp.SystemStart,
 		"SystemStart should be 1654041600",
 	)
@@ -269,7 +268,7 @@ func TestGetDatum(t *testing.T) {
 		t.Fatalf("GetDatum failed: %v", err)
 	}
 
-	datumBytes, err := cbor.Marshal(datum)
+	datumBytes, err := datum.MarshalCBOR()
 	if err != nil {
 		t.Fatalf("Failed to marshal datum: %v", err)
 	}

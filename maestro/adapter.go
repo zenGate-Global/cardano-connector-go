@@ -2,179 +2,376 @@ package maestro
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
-	"github.com/Salvionied/apollo/serialization/TransactionInput"
-	"github.com/Salvionied/apollo/serialization/TransactionOutput"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/blinklabs-io/gouroboros/cbor"
+	"github.com/blinklabs-io/gouroboros/ledger"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
+	"github.com/blinklabs-io/gouroboros/ledger/mary"
+	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 	"github.com/maestro-org/go-sdk/models"
+
+	"github.com/Salvionied/apollo/v2/backend"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
-func parseMaestroFloat(floatString string) float32 {
-	if floatString == "" {
-		return 0
-	}
-	splitString := strings.Split(floatString, "/")
-	top := splitString[0]
-	bottom := splitString[1]
-	topFloat, _ := strconv.ParseFloat(top, 32)
-	bottomFloat, _ := strconv.ParseFloat(bottom, 32)
-	return float32(topFloat / bottomFloat)
-}
-
-// adaptMaestroProtocolParams converts Maestro ProtocolParameters to Base.ProtocolParameters
-// This function maps the actual Maestro SDK protocol parameters structure based on the user's provided code
+// adaptMaestroProtocolParams converts Maestro protocol parameters into the
+// apollo v2 backend.ProtocolParameters shape.
 func adaptMaestroProtocolParams(
-	p models.ProtocolParams,
-) (Base.ProtocolParameters, error) {
-	protocolParams := Base.ProtocolParameters{}
-
-	// Map ALL the fields
-	protocolParams.MinFeeConstant = int64(
-		p.MinFeeConstant.LovelaceAmount.Lovelace,
-	)
-	protocolParams.MinFeeCoefficient = int64(p.MinFeeCoefficient)
-	protocolParams.MaxTxSize = int(p.MaxTransactionSize.Bytes)
-	protocolParams.MaxBlockSize = int(p.MaxBlockBodySize.Bytes)
-	protocolParams.MaxBlockHeaderSize = int(p.MaxBlockHeaderSize.Bytes)
-	protocolParams.KeyDeposits = strconv.FormatInt(
-		p.StakeCredentialDeposit.LovelaceAmount.Lovelace,
-		10,
-	)
-	protocolParams.PoolDeposits = strconv.FormatInt(
-		p.StakePoolDeposit.LovelaceAmount.Lovelace,
-		10,
-	)
-	parsedPoolInfl, _ := strconv.ParseFloat(p.StakePoolPledgeInfluence, 32)
-	protocolParams.PooolInfluence = float32(parsedPoolInfl)
-	monExp, _ := strconv.ParseFloat(p.MonetaryExpansion, 32)
-	protocolParams.MonetaryExpansion = float32(monExp)
-	tresExp, _ := strconv.ParseFloat(p.TreasuryExpansion, 32)
-	protocolParams.TreasuryExpansion = float32(tresExp)
-	protocolParams.DecentralizationParam = 0
-	protocolParams.ExtraEntropy = ""
-	protocolParams.ProtocolMajorVersion = int(p.ProtocolVersion.Major)
-	protocolParams.ProtocolMinorVersion = int(p.ProtocolVersion.Minor)
-	protocolParams.MinPoolCost = strconv.FormatInt(
-		p.MinStakePoolCost.LovelaceAmount.Lovelace,
-		10,
-	)
-	protocolParams.PriceMem = parseMaestroFloat(p.ScriptExecutionPrices.Memory)
-	protocolParams.PriceStep = parseMaestroFloat(p.ScriptExecutionPrices.Steps)
-	protocolParams.MaxTxExMem = strconv.FormatInt(
-		p.MaxExecutionUnitsPerTransaction.Memory,
-		10,
-	)
-	protocolParams.MaxTxExSteps = strconv.FormatInt(
-		p.MaxExecutionUnitsPerTransaction.Steps,
-		10,
-	)
-	protocolParams.MaxBlockExMem = strconv.FormatInt(
-		p.MaxExecutionUnitsPerBlock.Memory,
-		10,
-	)
-	protocolParams.MaxBlockExSteps = strconv.FormatInt(
-		p.MaxExecutionUnitsPerBlock.Steps,
-		10,
-	)
-	protocolParams.MaxValSize = strconv.FormatInt(p.MaxValueSize.Bytes, 10)
-	protocolParams.CollateralPercent = int(p.CollateralPercentage)
-	protocolParams.MaxCollateralInuts = int(p.MaxCollateralInputs)
-	protocolParams.CoinsPerUtxoByte = strconv.FormatInt(
-		p.MinUtxoDepositCoefficient,
-		10,
-	)
-	protocolParams.CoinsPerUtxoWord = "0"
-
-	costModels, err := normalizeMaestroCostModels(p.PlutusCostModels)
+	data models.ProtocolParams,
+) (backend.ProtocolParameters, error) {
+	priceMem, err := backend.ParseFraction(data.ScriptExecutionPrices.Memory)
 	if err != nil {
-		return Base.ProtocolParameters{}, err
+		return backend.ProtocolParameters{}, fmt.Errorf("invalid memory price: %w", err)
 	}
-	protocolParams.CostModelsRaw = costModels
-	protocolParams.MaximumReferenceScriptsSize = 0
-	protocolParams.MinFeeReferenceScriptsRange = 0
-	protocolParams.MinFeeReferenceScriptsBase = 0
-	protocolParams.MinFeeReferenceScriptsMultiplier = 0
+	priceStep, err := backend.ParseFraction(data.ScriptExecutionPrices.Steps)
+	if err != nil {
+		return backend.ProtocolParameters{}, fmt.Errorf("invalid step price: %w", err)
+	}
 
-	return protocolParams, nil
+	// These ratio/version fields are supplied live by Maestro (as fraction
+	// strings and a {major,minor} object) and must be mapped here rather than
+	// left zero for the preset to fill.
+	poolInfluence, err := backend.ParseFraction(data.StakePoolPledgeInfluence)
+	if err != nil {
+		return backend.ProtocolParameters{}, fmt.Errorf("invalid pool pledge influence: %w", err)
+	}
+	monetaryExpansion, err := backend.ParseFraction(data.MonetaryExpansion)
+	if err != nil {
+		return backend.ProtocolParameters{}, fmt.Errorf("invalid monetary expansion: %w", err)
+	}
+	treasuryExpansion, err := backend.ParseFraction(data.TreasuryExpansion)
+	if err != nil {
+		return backend.ProtocolParameters{}, fmt.Errorf("invalid treasury expansion: %w", err)
+	}
+	protocolMajor, err := backend.BoundedInt(data.ProtocolVersion.Major, "protocol major version")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	protocolMinor, err := backend.BoundedInt(data.ProtocolVersion.Minor, "protocol minor version")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+
+	maxBlockSize, err := backend.BoundedInt(data.MaxBlockBodySize.Bytes, "max block body size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	maxTxSize, err := backend.BoundedInt(data.MaxTransactionSize.Bytes, "max transaction size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	maxBlockHeaderSize, err := backend.BoundedInt(data.MaxBlockHeaderSize.Bytes, "max block header size")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	collateralPercent, err := backend.BoundedInt(data.CollateralPercentage, "collateral percentage")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+	maxCollateralInputs, err := backend.BoundedInt(data.MaxCollateralInputs, "max collateral inputs")
+	if err != nil {
+		return backend.ProtocolParameters{}, err
+	}
+
+	pp := backend.ProtocolParameters{
+		MinFeeCoefficient:    data.MinFeeCoefficient,
+		MinFeeConstant:       data.MinFeeConstant.LovelaceAmount.Lovelace,
+		MaxBlockSize:         maxBlockSize,
+		MaxTxSize:            maxTxSize,
+		MaxBlockHeaderSize:   maxBlockHeaderSize,
+		KeyDeposits:          strconv.FormatInt(data.StakeCredentialDeposit.LovelaceAmount.Lovelace, 10),
+		PoolDeposits:         strconv.FormatInt(data.StakePoolDeposit.LovelaceAmount.Lovelace, 10),
+		MinPoolCost:          strconv.FormatInt(data.MinStakePoolCost.LovelaceAmount.Lovelace, 10),
+		MaxTxExMem:           strconv.FormatInt(data.MaxExecutionUnitsPerTransaction.Memory, 10),
+		MaxTxExSteps:         strconv.FormatInt(data.MaxExecutionUnitsPerTransaction.Steps, 10),
+		MaxBlockExMem:        strconv.FormatInt(data.MaxExecutionUnitsPerBlock.Memory, 10),
+		MaxBlockExSteps:      strconv.FormatInt(data.MaxExecutionUnitsPerBlock.Steps, 10),
+		MaxValSize:           strconv.FormatInt(data.MaxValueSize.Bytes, 10),
+		CollateralPercent:    collateralPercent,
+		MaxCollateralInputs:  maxCollateralInputs,
+		CoinsPerUtxoByte:     strconv.FormatInt(data.MinUtxoDepositCoefficient, 10),
+		PriceMem:             priceMem,
+		PriceStep:            priceStep,
+		PoolInfluence:        poolInfluence,
+		MonetaryExpansion:    monetaryExpansion,
+		TreasuryExpansion:    treasuryExpansion,
+		ProtocolMajorVersion: protocolMajor,
+		ProtocolMinorVersion: protocolMinor,
+	}
+
+	// Parse cost models from Maestro response.
+	// PlutusCostModels is typed as `any`; when unmarshaled from JSON it is
+	// map[string]interface{} with keys like "plutus:v1", "plutus:v2", "plutus:v3"
+	// and values that are []interface{} of float64.
+	// ComputeScriptDataHash expects keys "PlutusV1", "PlutusV2", "PlutusV3".
+	if rawModels, ok := data.PlutusCostModels.(map[string]any); ok {
+		pp.CostModels = make(map[string][]int64, len(rawModels))
+		for key, val := range rawModels {
+			costs, ok := val.([]any)
+			if !ok {
+				return backend.ProtocolParameters{}, fmt.Errorf("unexpected cost model format for %s: expected []any, got %T", key, val)
+			}
+			int64Costs := make([]int64, 0, len(costs))
+			for i, c := range costs {
+				f, ok := c.(float64)
+				if !ok {
+					return backend.ProtocolParameters{}, fmt.Errorf("cost model %q element %d: expected float64, got %T", key, i, c)
+				}
+				// Reject non-integral or out-of-int64-range values rather than
+				// silently truncating (out-of-range float-to-int conversion is
+				// implementation-defined in Go).
+				if f != math.Trunc(f) || f < math.MinInt64 || f >= math.MaxInt64 {
+					return backend.ProtocolParameters{}, fmt.Errorf("cost model %q element %d: value %v is not a valid int64", key, i, f)
+				}
+				int64Costs = append(int64Costs, int64(f))
+			}
+			pp.CostModels[maestroCostModelKey(key)] = int64Costs
+		}
+	}
+
+	return pp, nil
 }
 
-func normalizeMaestroCostModels(raw any) (map[string][]int64, error) {
-	if raw == nil {
-		return nil, errors.New("maestro: protocol parameters are missing plutus_cost_models")
+// maestroCostModelKey translates Maestro cost model keys to the canonical form
+// expected by ComputeScriptDataHash ("PlutusV1", "PlutusV2", "PlutusV3").
+func maestroCostModelKey(key string) string {
+	switch key {
+	case "plutus:v1", "plutus_v1":
+		return "PlutusV1"
+	case "plutus:v2", "plutus_v2":
+		return "PlutusV2"
+	case "plutus:v3", "plutus_v3":
+		return "PlutusV3"
+	default:
+		return key
 	}
+}
 
-	payload, err := json.Marshal(raw)
+// maestroUtxoToCommon converts a Maestro UTxO to a gouroboros common.Utxo.
+func maestroUtxoToCommon(raw models.Utxo, address common.Address) (common.Utxo, error) {
+	hashBytes, err := hex.DecodeString(raw.TxHash)
 	if err != nil {
-		return nil, fmt.Errorf("maestro: marshal plutus_cost_models: %w", err)
+		return common.Utxo{}, err
+	}
+	if len(hashBytes) != common.Blake2b256Size {
+		return common.Utxo{}, fmt.Errorf("invalid tx hash length: expected %d bytes, got %d", common.Blake2b256Size, len(hashBytes))
+	}
+	var txId common.Blake2b256
+	copy(txId[:], hashBytes)
+
+	if raw.Index < 0 {
+		return common.Utxo{}, fmt.Errorf("negative output index: %d", raw.Index)
+	}
+	if raw.Index > math.MaxUint32 {
+		return common.Utxo{}, fmt.Errorf("output index %d exceeds uint32 range", raw.Index)
+	}
+	input := shelley.ShelleyTransactionInput{
+		TxId:        txId,
+		OutputIndex: uint32(raw.Index),
 	}
 
-	var decoded map[string][]int64
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return nil, fmt.Errorf("maestro: decode plutus_cost_models: %w", err)
-	}
-
-	keyAliases := map[string]string{
-		"plutus_v1": "PlutusV1",
-		"plutus_v2": "PlutusV2",
-		"plutus_v3": "PlutusV3",
-		"PlutusV1":  "PlutusV1",
-		"PlutusV2":  "PlutusV2",
-		"PlutusV3":  "PlutusV3",
-	}
-
-	result := make(map[string][]int64, 3)
-	for sourceKey, targetKey := range keyAliases {
-		values, ok := decoded[sourceKey]
-		if !ok {
-			continue
+	// Prefer the resolved output CBOR when Maestro supplies it (requested via
+	// params.WithCbor()). Decoding the on-chain output bytes directly preserves
+	// inline datums and reference scripts exactly (era-generic), avoiding the
+	// lossy JSON-field reconstruction below. Fall back to the JSON fields when
+	// txout_cbor is absent.
+	if raw.TxOutCbor != "" {
+		outputBytes, err := hex.DecodeString(raw.TxOutCbor)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("invalid txout_cbor hex: %w", err)
 		}
-		copied := make([]int64, len(values))
-		copy(copied, values)
-		result[targetKey] = copied
+		output, err := ledger.NewTransactionOutputFromCbor(outputBytes)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("failed to decode txout_cbor: %w", err)
+		}
+		return common.Utxo{Id: input, Output: output}, nil
 	}
 
-	if len(result) == 0 {
-		return nil, errors.New("maestro: protocol parameters contain no supported cost models")
+	var lovelace uint64
+	assetData := make(map[common.Blake2b224]map[cbor.ByteString]*big.Int)
+
+	for _, asset := range raw.Assets {
+		if asset.Unit == "lovelace" {
+			if asset.Amount < 0 {
+				return common.Utxo{}, fmt.Errorf("negative lovelace amount: %d", asset.Amount)
+			}
+			lovelace = uint64(asset.Amount) //nolint:gosec // validated non-negative above
+		} else {
+			if asset.Amount < 0 {
+				return common.Utxo{}, fmt.Errorf("negative asset amount %d for unit %s", asset.Amount, asset.Unit)
+			}
+			policyId, assetName, err := backend.ParseAssetUnit(asset.Unit)
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("invalid asset unit %q: %w", asset.Unit, err)
+			}
+
+			if _, ok := assetData[policyId]; !ok {
+				assetData[policyId] = make(map[cbor.ByteString]*big.Int)
+			}
+			assetData[policyId][assetName] = big.NewInt(asset.Amount)
+		}
 	}
 
+	var assets *common.MultiAsset[common.MultiAssetTypeOutput]
+	if len(assetData) > 0 {
+		ma := common.NewMultiAsset[common.MultiAssetTypeOutput](assetData)
+		assets = &ma
+	}
+
+	output := babbage.BabbageTransactionOutput{
+		OutputAddress: address,
+		OutputAmount: mary.MaryTransactionOutputValue{
+			Amount: lovelace,
+			Assets: assets,
+		},
+	}
+
+	// Map datum to output's DatumOption.
+	// Maestro returns the datum field as a JSON object with keys "type", "hash",
+	// "bytes", "json". When unmarshaled into `any` it becomes map[string]interface{}.
+	// The "type" discriminator is "hash" or "inline"; Maestro can include
+	// resolved datum "bytes" even for type "hash" outputs, so the datum kind
+	// must be decided by "type", not by the presence of "bytes".
+	if datumMap, ok := raw.Datum.(map[string]any); ok {
+		datumType, _ := datumMap["type"].(string)
+		switch datumType {
+		case "inline":
+			datumCborHex, _ := datumMap["bytes"].(string)
+			if datumCborHex == "" {
+				return common.Utxo{}, errors.New("inline datum is missing its CBOR bytes")
+			}
+			// Inline datum: "bytes" field contains the CBOR hex of the datum.
+			datumBytes, err := hex.DecodeString(datumCborHex)
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("invalid inline datum CBOR hex %q: %w", datumCborHex, err)
+			}
+			cborBytes, err := cbor.Encode([]any{1, cbor.Tag{Number: 24, Content: datumBytes}})
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("failed to encode inline datum option: %w", err)
+			}
+			var opt babbage.BabbageTransactionOutputDatumOption
+			if err := opt.UnmarshalCBOR(cborBytes); err != nil {
+				return common.Utxo{}, fmt.Errorf("failed to unmarshal inline datum option: %w", err)
+			}
+			output.DatumOption = &opt
+		case "hash":
+			hashHex, _ := datumMap["hash"].(string)
+			if hashHex == "" {
+				return common.Utxo{}, errors.New("hash datum is missing its hash")
+			}
+			// Datum hash reference only.
+			hashBytes, err := hex.DecodeString(hashHex)
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("invalid datum hash hex %q: %w", hashHex, err)
+			}
+			if len(hashBytes) != common.Blake2b256Size {
+				return common.Utxo{}, fmt.Errorf("invalid datum hash length: expected %d bytes, got %d", common.Blake2b256Size, len(hashBytes))
+			}
+			var hash common.Blake2b256
+			copy(hash[:], hashBytes)
+			cborBytes, err := cbor.Encode([]any{0, hash})
+			if err != nil {
+				return common.Utxo{}, fmt.Errorf("failed to encode datum option hash: %w", err)
+			}
+			var opt babbage.BabbageTransactionOutputDatumOption
+			if err := opt.UnmarshalCBOR(cborBytes); err != nil {
+				return common.Utxo{}, fmt.Errorf("failed to unmarshal datum option: %w", err)
+			}
+			output.DatumOption = &opt
+		default:
+			return common.Utxo{}, fmt.Errorf("unsupported maestro datum type %q", datumType)
+		}
+	}
+
+	// Parse reference script if present, verifying the script bytes against
+	// the script hash claimed by Maestro.
+	if raw.ReferenceScript.Bytes != "" {
+		scriptBytes, err := hex.DecodeString(raw.ReferenceScript.Bytes)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("invalid reference script hex: %w", err)
+		}
+		ref, err := maestroScriptRef(raw.ReferenceScript.Type, scriptBytes, raw.ReferenceScript.Hash)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("failed to parse reference script: %w", err)
+		}
+		output.TxOutScriptRef = ref
+	}
+
+	return common.Utxo{
+		Id:     input,
+		Output: &output,
+	}, nil
+}
+
+// maestroScriptRef builds a ScriptRef from the Maestro script type and CBOR
+// bytes. When Maestro supplies the script hash (expectedHashHex non-empty),
+// the script bytes are verified against it rather than trusted as-is.
+func maestroScriptRef(scriptType string, scriptCbor []byte, expectedHashHex string) (*common.ScriptRef, error) {
+	var refType uint
+	switch scriptType {
+	case "native":
+		refType = common.ScriptRefTypeNativeScript
+	case "plutusv1":
+		refType = common.ScriptRefTypePlutusV1
+	case "plutusv2":
+		refType = common.ScriptRefTypePlutusV2
+	case "plutusv3":
+		refType = common.ScriptRefTypePlutusV3
+	default:
+		return nil, fmt.Errorf("unknown script type %q", scriptType)
+	}
+	return backend.ScriptRefFromBytes(refType, scriptCbor, expectedHashHex)
+}
+
+// parseRedeemerPurpose maps a redeemer purpose string to a gouroboros
+// RedeemerTag. backend.ParseRedeemerTag accepts spend/mint/cert/publish/reward/
+// withdraw; the long spellings "certificate" and "withdrawal" are normalized to
+// the accepted forms first (case-insensitively) before delegating.
+func parseRedeemerPurpose(purpose string) (common.RedeemerTag, error) {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "certificate":
+		return backend.ParseRedeemerTag("cert")
+	case "withdrawal":
+		return backend.ParseRedeemerTag("withdraw")
+	default:
+		return backend.ParseRedeemerTag(purpose)
+	}
+}
+
+// evaluationsToExUnits converts a Maestro evaluate response into a redeemer
+// ExUnits map. A response with zero evaluation results is an error: returning
+// an empty map with a nil error would let callers silently keep zero
+// execution budgets for their redeemers.
+func evaluationsToExUnits(evals models.EvaluateTxResponse) (map[common.RedeemerKey]common.ExUnits, error) {
+	if len(evals) == 0 {
+		return nil, errors.New("script evaluation returned no results")
+	}
+	result := make(map[common.RedeemerKey]common.ExUnits, len(evals))
+	for _, eval := range evals {
+		if eval.RedeemerIndex < 0 {
+			return nil, fmt.Errorf("negative redeemer index: %d", eval.RedeemerIndex)
+		}
+		if int64(eval.RedeemerIndex) > math.MaxUint32 {
+			return nil, fmt.Errorf("redeemer index %d exceeds uint32 range", eval.RedeemerIndex)
+		}
+		tag, err := parseRedeemerPurpose(eval.RedeemerTag)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redeemer tag %q: %w", eval.RedeemerTag, err)
+		}
+		key := common.RedeemerKey{Tag: tag, Index: uint32(eval.RedeemerIndex)}
+		result[key] = common.ExUnits{Memory: eval.ExUnits.Mem, Steps: eval.ExUnits.Steps}
+	}
 	return result, nil
 }
 
-// utxoCacheKey builds the cache key for a UTxO's raw CBOR.
-func utxoCacheKey(txHash string, index int) string {
-	return txHash + "#" + strconv.Itoa(index)
-}
-
-// adaptMaestroUtxoToApolloUtxo converts a Maestro UTxO to Apollo UTxO.
-// It returns the decoded Apollo UTxO and the original txout_cbor hex
-// so callers can cache it for later re-use.
-func adaptMaestroUtxoToApolloUtxo(mUtxo models.Utxo) (UTxO.UTxO, string, error) {
-	utxo := UTxO.UTxO{}
-	decodedHash, _ := hex.DecodeString(mUtxo.TxHash)
-	utxo.Input = TransactionInput.TransactionInput{
-		TransactionId: decodedHash,
-		Index:         int(mUtxo.Index),
-	}
-	output := TransactionOutput.TransactionOutput{}
-	decodedCbor, _ := hex.DecodeString(mUtxo.TxOutCbor)
-	err := cbor.Unmarshal(decodedCbor, &output)
-	if err != nil {
-		return UTxO.UTxO{}, "", err
-	}
-	utxo.Output = output
-
-	return utxo, mUtxo.TxOutCbor, nil
-}
-
-// adaptMaestroDelegation converts Maestro account info to connector delegation
+// adaptMaestroDelegation converts Maestro account info to connector delegation.
 func adaptMaestroDelegation(
 	acc models.AccountInformation,
 	epoch int,
@@ -185,47 +382,4 @@ func adaptMaestroDelegation(
 		PoolId:  acc.DelegatedPool,
 		Epoch:   epoch,
 	}
-}
-
-// adaptApolloUtxosToMaestro converts Apollo UTxOs to Maestro format for evaluation.
-// lookupRawCbor, when non-nil, is called with the cache key ("txhash#index") and
-// should return the original txout_cbor hex if available. Using the original bytes
-// avoids CBOR re-encoding mismatches that Maestro rejects as "Malformed additional UTxO".
-func adaptApolloUtxosToMaestro(
-	apollo []UTxO.UTxO,
-	lookupRawCbor func(key string) (string, bool),
-) ([]models.AdditionalUtxo, error) {
-	out := make([]models.AdditionalUtxo, 0, len(apollo))
-	for _, u := range apollo {
-		txHash := hex.EncodeToString(u.Input.TransactionId)
-		idx := u.Input.Index
-		key := utxoCacheKey(txHash, idx)
-
-		var txoutCbor string
-		if lookupRawCbor != nil {
-			if cached, ok := lookupRawCbor(key); ok {
-				txoutCbor = cached
-			}
-		}
-		if txoutCbor == "" {
-			// Fallback: re-marshal through Apollo (may produce different CBOR)
-			raw, err := cbor.Marshal(u.Output)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"cbor-marshal output for %s#%d: %w",
-					txHash,
-					idx,
-					err,
-				)
-			}
-			txoutCbor = hex.EncodeToString(raw)
-		}
-
-		out = append(out, models.AdditionalUtxo{
-			TxHash:    txHash,
-			Index:     idx,
-			TxoutCbor: txoutCbor,
-		})
-	}
-	return out, nil
 }

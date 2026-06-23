@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Salvionied/apollo/constants"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/constants"
 	"github.com/tj/assert"
+
+	"github.com/Salvionied/apollo/v2/backend"
 	connector "github.com/zenGate-Global/cardano-connector-go"
+	tests "github.com/zenGate-Global/cardano-connector-go/tests"
 )
 
 // setupMaestro creates a Maestro provider for testing
@@ -57,14 +58,8 @@ func TestGetProtocolParameters(t *testing.T) {
 	if pp.MaxTxSize == 0 {
 		t.Error("Expected non-zero MaxTxSize")
 	}
-	if len(pp.CostModelsRaw["PlutusV2"]) == 0 {
+	if len(pp.CostModels["PlutusV2"]) == 0 {
 		t.Error("Expected non-empty PlutusV2 cost model")
-	}
-	if pp.MinUtxo == "" {
-		t.Error("Expected non-empty MinUtxo")
-	}
-	if pp.CoinsPerUtxoWord == "" || pp.CoinsPerUtxoWord == "0" {
-		t.Error("Expected non-empty CoinsPerUtxoWord")
 	}
 	if pp.MinFeeReferenceScriptsMultiplier == 0 {
 		t.Error("Expected non-zero MinFeeReferenceScriptsMultiplier")
@@ -89,7 +84,7 @@ func TestGetGenesisParams(t *testing.T) {
 
 	assert.Equal(
 		t,
-		float32(0.05),
+		0.05,
 		gp.ActiveSlotsCoefficient,
 		"ActiveSlotsCoefficient should be 0.05",
 	)
@@ -104,7 +99,7 @@ func TestGetGenesisParams(t *testing.T) {
 	assert.Equal(t, 432000, gp.EpochLength, "EpochLength should be 432000")
 	assert.Equal(
 		t,
-		1654041600,
+		int64(1654041600),
 		gp.SystemStart,
 		"SystemStart should be 1654041600",
 	)
@@ -120,7 +115,7 @@ func TestGetGenesisParams(t *testing.T) {
 }
 
 func TestNewUsesGenesisOverride(t *testing.T) {
-	override := &Base.GenesisParameters{
+	override := &backend.GenesisParameters{
 		NetworkMagic:  999,
 		SystemStart:   123,
 		SlotLength:    2,
@@ -147,12 +142,12 @@ func TestNewUsesGenesisOverride(t *testing.T) {
 }
 
 func TestNewUsesProtocolParamsOverride(t *testing.T) {
-	override := &Base.ProtocolParameters{
+	override := &backend.ProtocolParameters{
 		MinFeeConstant:                   123,
-		CoinsPerUtxoWord:                 "456",
+		CoinsPerUtxoByte:                 "456",
 		MinFeeReferenceScriptsMultiplier: 789,
-		CostModelsRaw: map[string][]int64{
-			"PlutusV2": []int64{1, 2, 3},
+		CostModels: map[string][]int64{
+			"PlutusV2": {1, 2, 3},
 		},
 	}
 
@@ -191,7 +186,7 @@ func TestPreviewGenesisPreset(t *testing.T) {
 
 	assert.Equal(t, 2, gp.NetworkMagic, "NetworkMagic should be 2")
 	assert.Equal(t, 86400, gp.EpochLength, "EpochLength should be 86400")
-	assert.Equal(t, 1666656000, gp.SystemStart, "SystemStart should be 1666656000")
+	assert.Equal(t, int64(1666656000), gp.SystemStart, "SystemStart should be 1666656000")
 	assert.Equal(t, 432, gp.SecurityParam, "SecurityParam should be 432")
 }
 
@@ -246,7 +241,7 @@ func TestGetUtxos(t *testing.T) {
 	ctx := context.Background()
 
 	// Test with an address that should have UTxOs
-	utxos, err := m.GetUtxosByAddress(ctx, AddressToQuery)
+	utxos, err := m.GetUtxosByAddress(ctx, tests.AddressToQuery)
 	if err != nil {
 		t.Fatalf("GetUtxosByAddress failed: %v", err)
 	}
@@ -273,10 +268,10 @@ func TestGetUtxosWithUnit(t *testing.T) {
 		t.Error("Expected at least one UTxO with the specified unit")
 	}
 
-	if !reflect.DeepEqual(utxos[0], ApolloDiscoveryUTxO) {
+	if !reflect.DeepEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
 		t.Errorf(
 			"Expected UTxO %+v, got %+v",
-			ApolloDiscoveryUTxO,
+			tests.ApolloDiscoveryUTxO,
 			utxos[0],
 		)
 	}
@@ -298,8 +293,8 @@ func TestGetUtxoByUnit(t *testing.T) {
 		t.Fatal("Expected a UTxO but got nil")
 	}
 
-	if !reflect.DeepEqual(*utxo, ApolloDiscoveryUTxO) {
-		t.Errorf("Expected UTxO %+v, got %+v", ApolloDiscoveryUTxO, *utxo)
+	if !reflect.DeepEqual(*utxo, tests.ApolloDiscoveryUTxO) {
+		t.Errorf("Expected UTxO %+v, got %+v", tests.ApolloDiscoveryUTxO, *utxo)
 	}
 }
 
@@ -323,10 +318,10 @@ func TestGetUtxosByOutRef(t *testing.T) {
 		t.Errorf("Expected 1 UTxO, got %d", len(utxos))
 	}
 
-	if !reflect.DeepEqual(utxos[0], ApolloDiscoveryUTxO) {
+	if !reflect.DeepEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
 		t.Errorf(
 			"Expected UTxO %+v, got %+v",
-			ApolloDiscoveryUTxO,
+			tests.ApolloDiscoveryUTxO,
 			utxos[0],
 		)
 	}
@@ -362,17 +357,12 @@ func TestGetDatum(t *testing.T) {
 		t.Fatalf("GetDatum failed: %v", err)
 	}
 
-	datumBytes, err := cbor.Marshal(datum)
-	if err != nil {
-		t.Fatalf("Failed to marshal datum: %v", err)
-	}
+	actualDatumHex := hex.EncodeToString(datum.Cbor())
 
-	actualDatumHex := hex.EncodeToString(datumBytes)
-
-	if actualDatumHex != ExpectedDatum {
+	if actualDatumHex != tests.ExpectedDatum {
 		t.Errorf(
 			"Expected datum %s, got %s",
-			ExpectedDatum,
+			tests.ExpectedDatum,
 			actualDatumHex,
 		)
 	}
@@ -414,17 +404,19 @@ func TestEvaluateTxSample1(t *testing.T) {
 	m := setupMaestro(t)
 	ctx := context.Background()
 
-	tx1Bytes, _ := hex.DecodeString(ApolloEvalSample1Transaction)
+	tx1Bytes, _ := hex.DecodeString(tests.ApolloEvalSample1Transaction)
 
-	redeemers, err := m.EvaluateTx(ctx, tx1Bytes, ApolloEvalSample1UTxOs)
+	// NOTE: maestro IGNORES additionalUTxOs (SDK limitation), so this only
+	// succeeds for transactions whose inputs are already visible on-chain.
+	redeemers, err := m.EvaluateTx(ctx, tx1Bytes, tests.ApolloEvalSample1UTxOs)
 	if err != nil {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, ApolloEvalSample1RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample1RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
-			ApolloEvalSample1RedeemersExUnits,
+			tests.ApolloEvalSample1RedeemersExUnits,
 			redeemers,
 		)
 	}
@@ -435,17 +427,17 @@ func TestEvaluateTxSample2(t *testing.T) {
 	m := setupMaestro(t)
 	ctx := context.Background()
 
-	tx2Bytes, _ := hex.DecodeString(ApolloEvalSample2Transaction)
+	tx2Bytes, _ := hex.DecodeString(tests.ApolloEvalSample2Transaction)
 
-	redeemers, err := m.EvaluateTx(ctx, tx2Bytes, ApolloEvalSample2UTxOs)
+	redeemers, err := m.EvaluateTx(ctx, tx2Bytes, tests.ApolloEvalSample2UTxOs)
 	if err != nil {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, ApolloEvalSample2RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample2RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
-			ApolloEvalSample2RedeemersExUnits,
+			tests.ApolloEvalSample2RedeemersExUnits,
 			redeemers,
 		)
 	}
@@ -456,17 +448,17 @@ func TestEvaluateTxSample3(t *testing.T) {
 	m := setupMaestro(t)
 	ctx := context.Background()
 
-	tx3Bytes, _ := hex.DecodeString(ApolloEvalSample3Transaction)
+	tx3Bytes, _ := hex.DecodeString(tests.ApolloEvalSample3Transaction)
 
-	redeemers, err := m.EvaluateTx(ctx, tx3Bytes, ApolloEvalSample3UTxOs)
+	redeemers, err := m.EvaluateTx(ctx, tx3Bytes, tests.ApolloEvalSample3UTxOs)
 	if err != nil {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, ApolloEvalSample3RedeemersExUnits) {
+	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits) {
 		t.Errorf(
 			"Expected redeemers %+v, got %+v",
-			ApolloEvalSample3RedeemersExUnits,
+			tests.ApolloEvalSample3RedeemersExUnits,
 			redeemers,
 		)
 	}
@@ -478,11 +470,11 @@ func TestGetScriptCborByScriptHash(t *testing.T) {
 
 	scriptCbor, err := m.GetScriptCborByScriptHash(
 		ctx,
-		ScriptHashToQuery,
+		tests.ScriptHashToQuery,
 	)
 	if err != nil {
 		t.Fatalf("GetScriptCborByScriptHash failed: %v", err)
 	}
 
-	assert.Equal(t, scriptCbor, ExpectedScriptCbor)
+	assert.Equal(t, scriptCbor, tests.ExpectedScriptCbor)
 }
