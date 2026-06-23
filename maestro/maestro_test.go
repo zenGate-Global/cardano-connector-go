@@ -392,14 +392,8 @@ func TestSubmitTxBadRequest(t *testing.T) {
 }
 
 func TestEvaluateTxSample1(t *testing.T) {
-	// Maestro IGNORES additionalUTxOs (the SDK's AdditionalUtxos is []string and
-	// cannot carry the resolved-UTxO wire format), so it can only evaluate
-	// transactions whose inputs are already visible on-chain. The sample tx
-	// spends off-chain fixture inputs that are not on preprod, so Maestro
-	// returns "Could not resolve input ...#0". This is a documented backend
-	// limitation, not a bug; blockfrost/kupmios (which honor additionalUTxOs)
-	// keep their full eval-sample coverage.
-	t.Skip("maestro ignores additionalUTxOs and cannot resolve the off-chain sample inputs")
+	// Maestro forwards additionalUTxOs to /transactions/evaluate, so the sample
+	// tx's off-chain fixture inputs are resolved and the eval succeeds.
 	m := setupMaestro(t)
 	ctx := context.Background()
 
@@ -416,7 +410,8 @@ func TestEvaluateTxSample1(t *testing.T) {
 }
 
 func TestEvaluateTxSample2(t *testing.T) {
-	t.Skip("Skipping test: maestro does not allow malformed UTxOs")
+	// Maestro forwards additionalUTxOs to /transactions/evaluate, so the off-chain
+	// sample inputs are resolved and the eval succeeds.
 	m := setupMaestro(t)
 	ctx := context.Background()
 
@@ -433,7 +428,9 @@ func TestEvaluateTxSample2(t *testing.T) {
 }
 
 func TestEvaluateTxSample3(t *testing.T) {
-	t.Skip("Skipping test: maestro does not allow malformed UTxOs")
+	// Maestro forwards additionalUTxOs to /transactions/evaluate, so the off-chain
+	// sample inputs (including the withdrawal redeemers, which Maestro reports with
+	// the Conway short tag "wdrl") are resolved and the eval succeeds.
 	m := setupMaestro(t)
 	ctx := context.Background()
 

@@ -25,17 +25,14 @@ import (
 func adaptMaestroProtocolParams(
 	data models.ProtocolParams,
 ) (backend.ProtocolParameters, error) {
-	// Script execution prices. NOTE: the live Maestro API returns the step
-	// price under the JSON key "cpu", but the SDK's StringExUnits maps "steps",
-	// so data.ScriptExecutionPrices.Steps is empty. GetProtocolParameters
-	// recovers the correct prices from the raw response and overrides these.
-	// Parse tolerantly here (empty -> 0) so a missing/renamed field does not
-	// fail the whole conversion.
-	priceMem, err := parseFractionOrZero(data.ScriptExecutionPrices.Memory)
+	// Script execution prices, as fraction strings (e.g. "577/10000" and
+	// "721/10000000"). The SDK exposes the step price under .Cpu (the JSON key
+	// Maestro actually returns).
+	priceMem, err := backend.ParseFraction(data.ScriptExecutionPrices.Memory)
 	if err != nil {
 		return backend.ProtocolParameters{}, fmt.Errorf("invalid memory price: %w", err)
 	}
-	priceStep, err := parseFractionOrZero(data.ScriptExecutionPrices.Steps)
+	priceStep, err := backend.ParseFraction(data.ScriptExecutionPrices.Cpu)
 	if err != nil {
 		return backend.ProtocolParameters{}, fmt.Errorf("invalid step price: %w", err)
 	}
@@ -335,26 +332,17 @@ func maestroScriptRef(scriptType string, scriptCbor []byte, expectedHashHex stri
 	return backend.ScriptRefFromBytes(refType, scriptCbor, expectedHashHex)
 }
 
-// parseFractionOrZero parses a fraction string, returning 0 for an empty
-// string. Maestro can omit/rename fraction fields (e.g. the step price arrives
-// under "cpu", which the SDK does not map), so an empty value must not fail the
-// whole protocol-parameter conversion; the caller recovers/fills it separately.
-func parseFractionOrZero(s string) (float64, error) {
-	if strings.TrimSpace(s) == "" {
-		return 0, nil
-	}
-	return backend.ParseFraction(s)
-}
-
 // parseRedeemerPurpose maps a redeemer purpose string to a gouroboros
 // RedeemerTag. backend.ParseRedeemerTag accepts spend/mint/cert/publish/reward/
-// withdraw; the long spellings "certificate" and "withdrawal" are normalized to
-// the accepted forms first (case-insensitively) before delegating.
+// withdraw; Maestro emits the Conway short tags (e.g. "wdrl" for withdrawal)
+// and some responses use the long spellings ("certificate"/"withdrawal"), so
+// those are normalized to the accepted forms first (case-insensitively) before
+// delegating.
 func parseRedeemerPurpose(purpose string) (common.RedeemerTag, error) {
 	switch strings.ToLower(strings.TrimSpace(purpose)) {
 	case "certificate":
 		return backend.ParseRedeemerTag("cert")
-	case "withdrawal":
+	case "withdrawal", "wdrl":
 		return backend.ParseRedeemerTag("withdraw")
 	default:
 		return backend.ParseRedeemerTag(purpose)

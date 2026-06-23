@@ -3,11 +3,9 @@ package maestro
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"math"
 	"strings"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 	"github.com/blinklabs-io/gouroboros/cbor"
 	"github.com/blinklabs-io/gouroboros/ledger/common"
 	maestroClient "github.com/maestro-org/go-sdk/client"
+	"github.com/maestro-org/go-sdk/models"
 	"github.com/maestro-org/go-sdk/utils"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
@@ -50,7 +49,6 @@ func New(config Config) (*MaestroProvider, error) {
 
 	provider := &MaestroProvider{
 		client:                 client,
-		projectID:              config.ProjectID,
 		genesisParams:          genesisParams,
 		protocolParamsOverride: config.ProtocolParamsOverride,
 		protocolParamsPreset:   protocolParamsPreset,
@@ -99,68 +97,7 @@ func (m *MaestroProvider) GetProtocolParameters(
 		)
 	}
 
-	// The SDK's StringExUnits maps the step price to the JSON key "steps", but
-	// the live Maestro API returns it under "cpu", so resp.Data.ScriptExecutionPrices.Steps
-	// is empty. Recover the real prices from the raw response.
-	if priceMem, priceStep, ok := m.fetchScriptExecutionPrices(); ok {
-		protocolParams.PriceMem = priceMem
-		protocolParams.PriceStep = priceStep
-	}
-
 	return mergeMaestroProtocolParams(protocolParams, m.protocolParamsPreset), nil
-}
-
-// fetchScriptExecutionPrices fetches the protocol parameters as raw JSON and
-// parses script_execution_prices, reading the step price from the "cpu" key
-// (which the SDK model does not map). Returns ok=false on any error so the
-// caller can fall back to the preset prices.
-func (m *MaestroProvider) fetchScriptExecutionPrices() (priceMem, priceStep float64, ok bool) {
-	httpClient := m.client.HTTPClient
-	if httpClient == nil {
-		return 0, 0, false
-	}
-	url := m.client.BaseUrl + "/protocol-parameters"
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return 0, 0, false
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("api-key", m.projectID)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, 0, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, false
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, 0, false
-	}
-
-	var parsed struct {
-		Data struct {
-			ScriptExecutionPrices struct {
-				Memory string `json:"memory"`
-				Cpu    string `json:"cpu"`
-			} `json:"script_execution_prices"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, 0, false
-	}
-
-	mem, err := backend.ParseFraction(parsed.Data.ScriptExecutionPrices.Memory)
-	if err != nil {
-		return 0, 0, false
-	}
-	step, err := backend.ParseFraction(parsed.Data.ScriptExecutionPrices.Cpu)
-	if err != nil {
-		return 0, 0, false
-	}
-	return mem, step, true
 }
 
 // GetGenesisParams returns the genesis parameters for the configured network.
@@ -582,24 +519,53 @@ func (m *MaestroProvider) SubmitTx(
 
 // EvaluateTx evaluates a transaction's scripts.
 //
-// additionalUTxOs is IGNORED. The Maestro SDK exposes additional UTxOs as a
-// variadic []string (models.AdditionalUtxo), but Maestro's REST
-// /transactions/evaluate additional_utxos field expects an array of objects
-// (tx ref + resolved output CBOR), which the SDK type cannot represent
-// faithfully. Rather than ship a guessed wire format, the resolved UTxOs are
-// not forwarded: this backend can only evaluate transactions whose inputs are
-// already visible on-chain to Maestro, and does NOT support evaluating
-// off-chain or chained inputs.
+// additionalUTxOs are forwarded to Maestro's /transactions/evaluate
+// additional_utxos field (an array of {tx_hash, index, txout_cbor} objects), so
+// this backend CAN evaluate transactions that spend inputs not yet visible
+// on-chain (off-chain or chained inputs), as long as each such input is
+// supplied here with its resolved output.
 func (m *MaestroProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
 	additionalUTxOs []common.Utxo,
 ) (map[common.RedeemerKey]common.ExUnits, error) {
-	_ = additionalUTxOs
+	addl, err := maestroAdditionalUtxos(additionalUTxOs)
+	if err != nil {
+		return nil, err
+	}
 	txHex := hex.EncodeToString(txBytes)
-	evaluation, err := m.client.EvaluateTx(txHex)
+	evaluation, err := m.client.EvaluateTx(txHex, addl...)
 	if err != nil {
 		return nil, err
 	}
 	return evaluationsToExUnits(evaluation)
+}
+
+// maestroAdditionalUtxos converts resolved gouroboros UTxOs into the Maestro
+// additional_utxos wire form. txout_cbor is the canonical CBOR encoding of the
+// resolved transaction OUTPUT (Babbage map form / Alonzo array form), produced
+// via the output's MarshalCBOR.
+func maestroAdditionalUtxos(utxos []common.Utxo) ([]models.AdditionalUtxo, error) {
+	if len(utxos) == 0 {
+		return nil, nil
+	}
+	addl := make([]models.AdditionalUtxo, 0, len(utxos))
+	for _, utxo := range utxos {
+		if utxo.Output == nil {
+			return nil, errors.New("maestro: additional UTxO has no resolved output")
+		}
+		outBytes, err := cbor.Encode(utxo.Output)
+		if err != nil {
+			return nil, fmt.Errorf("maestro: failed to encode additional UTxO output CBOR: %w", err)
+		}
+		if utxo.Id.Index() > math.MaxInt32 {
+			return nil, fmt.Errorf("maestro: additional UTxO index %d exceeds int range", utxo.Id.Index())
+		}
+		addl = append(addl, models.AdditionalUtxo{
+			TxHash:    hex.EncodeToString(utxo.Id.Id().Bytes()),
+			Index:     int(utxo.Id.Index()),
+			TxoutCbor: hex.EncodeToString(outBytes),
+		})
+	}
+	return addl, nil
 }

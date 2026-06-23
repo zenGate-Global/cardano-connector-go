@@ -85,10 +85,11 @@ type Provider interface {
 
 	// EvaluateTx evaluates a transaction's scripts and returns the execution units,
 	// keyed by redeemer (tag + index).
-	// additionalUTxOs can be provided for inputs not yet on-chain; only the
-	// ogmios (kupmios) and blockfrost backends honor them. The maestro and
-	// utxorpc backends IGNORE additionalUTxOs and can only evaluate transactions
-	// whose inputs are already visible on-chain.
+	// additionalUTxOs can be provided for inputs not yet on-chain; the ogmios
+	// (kupmios), blockfrost, and maestro backends honor them. The utxorpc backend
+	// IGNORES additionalUTxOs (its EvalTx proto has no field for resolved UTxOs)
+	// and can only evaluate transactions whose inputs are already visible
+	// on-chain.
 	EvaluateTx(
 		ctx context.Context,
 		tx []byte,

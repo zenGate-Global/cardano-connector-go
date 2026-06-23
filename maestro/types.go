@@ -25,7 +25,6 @@ type Config struct {
 // MaestroProvider implements the connector.Provider interface for the Maestro API.
 type MaestroProvider struct {
 	client                 *maestroClient.Client
-	projectID              string
 	genesisParams          backend.GenesisParameters
 	protocolParamsOverride *backend.ProtocolParameters
 	protocolParamsPreset   backend.ProtocolParameters

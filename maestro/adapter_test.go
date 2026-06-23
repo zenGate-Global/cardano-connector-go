@@ -7,7 +7,11 @@ import (
 
 	"github.com/Salvionied/apollo/v2/backend"
 	"github.com/blinklabs-io/gouroboros/cbor"
+	"github.com/blinklabs-io/gouroboros/ledger"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
 	"github.com/blinklabs-io/gouroboros/ledger/common"
+	"github.com/blinklabs-io/gouroboros/ledger/mary"
+	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 	"github.com/maestro-org/go-sdk/models"
 )
 
@@ -85,7 +89,7 @@ func TestMaestroUtxoToCommonFallsBackToJSONFields(t *testing.T) {
 // individual test to set.
 func baseMaestroParams() models.ProtocolParams {
 	return models.ProtocolParams{
-		ScriptExecutionPrices:    models.StringExUnits{Memory: "577/10000", Steps: "721/10000000"},
+		ScriptExecutionPrices:    models.StringExUnits{Memory: "577/10000", Cpu: "721/10000000"},
 		StakePoolPledgeInfluence: "3/10",
 		MonetaryExpansion:        "3/1000",
 		TreasuryExpansion:        "1/5",
@@ -281,5 +285,99 @@ func TestUnwrapMaestroScriptCborSingleWrappedUnchanged(t *testing.T) {
 	}
 	if got != singleHex {
 		t.Fatalf("single-wrapped form must be unchanged: got %s, want %s", got, singleHex)
+	}
+}
+
+// TestMaestroAdditionalUtxos asserts that resolved UTxOs are converted into the
+// Maestro additional_utxos wire form: tx_hash + index from the input, and
+// txout_cbor = the canonical CBOR of the resolved output (round-trips back to an
+// equivalent output).
+func TestMaestroAdditionalUtxos(t *testing.T) {
+	const txHashHex = "b50e73e74a3073bc44f555928702c0ae0f555a43f1afdce34b3294247dce022d"
+	const lovelace uint64 = 11977490
+	address, err := common.NewAddress("addr_test1wpgexmeunzsykesf42d4eqet5yvzeap6trjnflxqtkcf66g0kpnxt")
+	if err != nil {
+		t.Fatalf("NewAddress failed: %v", err)
+	}
+	txHashBytes, err := hex.DecodeString(txHashHex)
+	if err != nil {
+		t.Fatalf("decode tx hash: %v", err)
+	}
+	var txId common.Blake2b256
+	copy(txId[:], txHashBytes)
+	utxo := common.Utxo{
+		Id: shelley.ShelleyTransactionInput{TxId: txId, OutputIndex: 0},
+		Output: &babbage.BabbageTransactionOutput{
+			OutputAddress: address,
+			OutputAmount:  mary.MaryTransactionOutputValue{Amount: lovelace},
+		},
+	}
+
+	addl, err := maestroAdditionalUtxos([]common.Utxo{utxo})
+	if err != nil {
+		t.Fatalf("maestroAdditionalUtxos failed: %v", err)
+	}
+	if len(addl) != 1 {
+		t.Fatalf("expected 1 additional utxo, got %d", len(addl))
+	}
+	got := addl[0]
+
+	if got.TxHash != txHashHex {
+		t.Errorf("tx_hash: got %s, want %s", got.TxHash, txHashHex)
+	}
+	if got.Index != 0 {
+		t.Errorf("index: got %d, want 0", got.Index)
+	}
+
+	// txout_cbor must be the canonical output CBOR: decode it back (era-generic)
+	// and confirm it matches the original output's address and lovelace.
+	outBytes, err := hex.DecodeString(got.TxoutCbor)
+	if err != nil {
+		t.Fatalf("invalid txout_cbor hex: %v", err)
+	}
+	decoded, err := ledger.NewTransactionOutputFromCbor(outBytes)
+	if err != nil {
+		t.Fatalf("txout_cbor did not decode as an output: %v", err)
+	}
+	if decoded.Address().String() != address.String() {
+		t.Errorf("decoded address mismatch: %s != %s", decoded.Address().String(), address.String())
+	}
+	if decoded.Amount().Uint64() != lovelace {
+		t.Errorf("decoded lovelace mismatch: %d != %d", decoded.Amount().Uint64(), lovelace)
+	}
+}
+
+// TestMaestroAdditionalUtxosEmpty asserts an empty input yields no additional
+// UTxOs and no error.
+func TestMaestroAdditionalUtxosEmpty(t *testing.T) {
+	addl, err := maestroAdditionalUtxos(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addl != nil {
+		t.Fatalf("expected nil, got %+v", addl)
+	}
+}
+
+// TestParseRedeemerPurposeWdrl asserts the Conway short tag "wdrl" (which Maestro
+// emits for withdrawal redeemers) maps to the reward/withdraw tag.
+func TestParseRedeemerPurposeWdrl(t *testing.T) {
+	for _, s := range []string{"wdrl", "WDRL", "withdrawal", "withdraw", "reward"} {
+		tag, err := parseRedeemerPurpose(s)
+		if err != nil {
+			t.Fatalf("parseRedeemerPurpose(%q) failed: %v", s, err)
+		}
+		if tag != common.RedeemerTagReward {
+			t.Errorf("parseRedeemerPurpose(%q) = %v, want RedeemerTagReward", s, tag)
+		}
+	}
+	for _, s := range []string{"certificate", "cert", "publish"} {
+		tag, err := parseRedeemerPurpose(s)
+		if err != nil {
+			t.Fatalf("parseRedeemerPurpose(%q) failed: %v", s, err)
+		}
+		if tag != common.RedeemerTagCert {
+			t.Errorf("parseRedeemerPurpose(%q) = %v, want RedeemerTagCert", s, tag)
+		}
 	}
 }
