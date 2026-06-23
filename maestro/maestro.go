@@ -5,16 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
+	"math"
 	"strings"
 	"time"
 
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
-	"github.com/maestro-org/go-sdk/client"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/cbor"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
+	maestroClient "github.com/maestro-org/go-sdk/client"
 	"github.com/maestro-org/go-sdk/models"
 	"github.com/maestro-org/go-sdk/utils"
 	connector "github.com/zenGate-Global/cardano-connector-go"
@@ -39,7 +37,7 @@ func New(config Config) (*MaestroProvider, error) {
 		)
 	}
 
-	maestroClient := client.NewClient(config.ProjectID, networkName)
+	client := maestroClient.NewClient(config.ProjectID, networkName)
 	genesisParams, err := resolveGenesisParams(config, networkName)
 	if err != nil {
 		return nil, err
@@ -50,7 +48,7 @@ func New(config Config) (*MaestroProvider, error) {
 	}
 
 	provider := &MaestroProvider{
-		client:                 maestroClient,
+		client:                 client,
 		genesisParams:          genesisParams,
 		protocolParamsOverride: config.ProtocolParamsOverride,
 		protocolParamsPreset:   protocolParamsPreset,
@@ -59,22 +57,6 @@ func New(config Config) (*MaestroProvider, error) {
 	}
 
 	return provider, nil
-}
-
-// cacheRawCbor stores the original txout_cbor hex from Maestro for later re-use.
-func (m *MaestroProvider) cacheRawCbor(txHash string, index int, rawCborHex string) {
-	if rawCborHex != "" {
-		m.rawCborCache.Store(utxoCacheKey(txHash, index), rawCborHex)
-	}
-}
-
-// lookupRawCbor retrieves a previously cached txout_cbor hex string.
-func (m *MaestroProvider) lookupRawCbor(key string) (string, bool) {
-	v, ok := m.rawCborCache.Load(key)
-	if !ok {
-		return "", false
-	}
-	return v.(string), true
 }
 
 // Network returns the network ID of the provider.
@@ -88,38 +70,40 @@ func (m *MaestroProvider) Epoch(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("maestro: failed to get current epoch: %w", err)
 	}
-	return int(resp.Data.EpochNo), nil
+	return resp.Data.EpochNo, nil
 }
 
 // GetProtocolParameters fetches the current protocol parameters from Maestro.
 func (m *MaestroProvider) GetProtocolParameters(
 	ctx context.Context,
-) (Base.ProtocolParameters, error) {
+) (backend.ProtocolParameters, error) {
 	if m.protocolParamsOverride != nil {
 		return *m.protocolParamsOverride, nil
 	}
 
-	maestroParams, err := m.client.ProtocolParameters()
+	resp, err := m.client.ProtocolParameters()
 	if err != nil {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"maestro: failed to get protocol parameters: %w",
 			err,
 		)
 	}
 
-	protocolParams, err := adaptMaestroProtocolParams(maestroParams.Data)
+	protocolParams, err := adaptMaestroProtocolParams(resp.Data)
 	if err != nil {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"maestro: failed to adapt protocol parameters: %w",
 			err,
 		)
 	}
+
 	return mergeMaestroProtocolParams(protocolParams, m.protocolParamsPreset), nil
 }
 
+// GetGenesisParams returns the genesis parameters for the configured network.
 func (m *MaestroProvider) GetGenesisParams(
 	ctx context.Context,
-) (Base.GenesisParameters, error) {
+) (backend.GenesisParameters, error) {
 	_ = ctx
 	return m.genesisParams, nil
 }
@@ -144,98 +128,79 @@ func (m *MaestroProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 func (m *MaestroProvider) GetUtxosByAddress(
 	ctx context.Context,
 	addr string,
-) ([]UTxO.UTxO, error) {
-	utxos := make([]UTxO.UTxO, 0)
-	params := utils.NewParameters()
-	params.WithCbor()
-	params.ResolveDatums()
-
-	utxosAtAddressAtApi, err := m.client.UtxosAtAddress(addr, params)
+) ([]common.Utxo, error) {
+	address, err := common.NewAddress(addr)
 	if err != nil {
-		return utxos, err
+		return nil, fmt.Errorf("%w: %v", connector.ErrInvalidAddress, err)
 	}
-
-	for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-		utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
-		if err != nil {
-			return nil, err
-		}
-		m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
-		utxos = append(utxos, utxo)
-	}
-
-	for utxosAtAddressAtApi.NextCursor != "" {
-		params := utils.NewParameters()
-		params.WithCbor()
-		params.ResolveDatums()
-		params.Cursor(utxosAtAddressAtApi.NextCursor)
-		utxosAtAddressAtApi, err = m.client.UtxosAtAddress(addr, params)
-		if err != nil {
-			return utxos, err
-		}
-		for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-			utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
-			if err != nil {
-				return nil, err
-			}
-			m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
-			utxos = append(utxos, utxo)
-		}
-	}
-
-	return utxos, nil
+	return m.collectUtxos(addr, address, nil)
 }
 
 // GetUtxosWithUnit fetches all UTxOs for a given address that contain a specific asset.
 func (m *MaestroProvider) GetUtxosWithUnit(
 	ctx context.Context,
 	addr, unit string,
-) ([]UTxO.UTxO, error) {
-	utxos := make([]UTxO.UTxO, 0)
-	params := utils.NewParameters()
-	params.WithCbor()
-	params.ResolveDatums()
-	params.Asset(unit)
-
-	utxosAtAddressAtApi, err := m.client.UtxosAtAddress(addr, params)
+) ([]common.Utxo, error) {
+	address, err := common.NewAddress(addr)
 	if err != nil {
-		return utxos, err
+		return nil, fmt.Errorf("%w: %v", connector.ErrInvalidAddress, err)
+	}
+	return m.collectUtxos(addr, address, &unit)
+}
+
+// collectUtxos pages through Maestro's UTxOs-at-address endpoint, optionally
+// filtered by asset unit, and converts each entry to a gouroboros common.Utxo.
+func (m *MaestroProvider) collectUtxos(
+	addrStr string,
+	address common.Address,
+	unit *string,
+) ([]common.Utxo, error) {
+	const maxPages = 1000
+	utxos := make([]common.Utxo, 0)
+	var lastCursor string
+
+	newParams := func() *utils.Parameters {
+		params := utils.NewParameters()
+		if unit != nil {
+			params.Asset(*unit)
+		}
+		// Request the resolved output CBOR and resolved datums so inline datums
+		// and reference scripts hydrate completely (see maestroUtxoToCommon).
+		params.WithCbor()
+		params.ResolveDatums()
+		return params
 	}
 
-	for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-		utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
+	params := newParams()
+	for range maxPages {
+		resp, err := m.client.UtxosAtAddress(addrStr, params)
 		if err != nil {
 			return nil, err
 		}
-		m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
-		utxos = append(utxos, utxo)
-	}
-
-	for utxosAtAddressAtApi.NextCursor != "" {
-		params := utils.NewParameters()
-		params.WithCbor()
-		params.ResolveDatums()
-		params.Asset(unit)
-		params.Cursor(utxosAtAddressAtApi.NextCursor)
-
-		utxosAtAddressAtApi, err = m.client.UtxosAtAddress(addr, params)
-		if err != nil {
-			return utxos, err
-		}
-		for _, maestroUtxo := range utxosAtAddressAtApi.Data {
-			utxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(maestroUtxo)
+		for _, maestroUtxo := range resp.Data {
+			utxo, err := maestroUtxoToCommon(maestroUtxo, address)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("maestro: failed to parse UTxO: %w", err)
 			}
-			m.cacheRawCbor(maestroUtxo.TxHash, int(maestroUtxo.Index), rawCbor)
 			utxos = append(utxos, utxo)
 		}
+
+		lastCursor = resp.NextCursor
+		if lastCursor == "" {
+			break
+		}
+		params = newParams()
+		params.Cursor(lastCursor)
+	}
+
+	if lastCursor != "" {
+		return nil, fmt.Errorf("maestro: UTxO pagination exceeded %d pages; results may be incomplete", maxPages)
 	}
 
 	return utxos, nil
 }
 
-// GetScriptCborByScriptHash fetches the CBOR of a script by its hash.
+// GetScriptCborByScriptHash fetches the CBOR of a script by its hash, hex-encoded.
 func (m *MaestroProvider) GetScriptCborByScriptHash(
 	ctx context.Context,
 	scriptHash string,
@@ -256,14 +221,74 @@ func (m *MaestroProvider) GetScriptCborByScriptHash(
 		)
 	}
 
-	return resp.Data.Bytes, nil
+	if resp.Data.Bytes == "" {
+		return "", fmt.Errorf(
+			"maestro: no script CBOR available for hash %s: %w",
+			scriptHash,
+			connector.ErrNotFound,
+		)
+	}
+
+	// Maestro returns the script double-CBOR-wrapped: the script CBOR is itself
+	// wrapped in an outer CBOR byte string (e.g. "590608" wrapping the inner
+	// "590605..." script). Other backends (and the reference-script resolution
+	// path) use the inner, single-wrapped form, so unwrap one byte-string layer
+	// to keep GetScriptCborByScriptHash consistent across providers.
+	return unwrapMaestroScriptCbor(resp.Data.Bytes)
+}
+
+// unwrapMaestroScriptCbor normalizes Maestro's script CBOR to the canonical
+// single-wrapped Plutus script form (a CBOR byte string wrapping the flat UPLC
+// program, e.g. "5906 05 <uplc>") used by Blockfrost, Kupo, and the
+// reference-script resolution path.
+//
+// Maestro returns the script DOUBLE-CBOR-wrapped: an outer byte string wrapping
+// the canonical script byte string (e.g. "590608" wrapping "590605..."). We
+// must strip exactly one layer in that case, but NOT when Maestro already
+// returns the canonical single-wrapped form, because that form is itself a CBOR
+// byte string and a naive single-strip would over-strip it down to raw UPLC.
+//
+// The distinguisher: after decoding one byte-string layer, the canonical form's
+// inner content is ALSO a CBOR byte string (the flat program wrapped once),
+// whereas the single-wrapped form's inner content is raw UPLC (not a CBOR byte
+// string). So we unwrap only when the inner content is itself a valid CBOR byte
+// string; otherwise we return the original bytes unchanged.
+func unwrapMaestroScriptCbor(scriptHex string) (string, error) {
+	raw, err := hex.DecodeString(scriptHex)
+	if err != nil {
+		return "", fmt.Errorf("maestro: invalid script CBOR hex: %w", err)
+	}
+	var inner []byte
+	if _, decErr := cbor.Decode(raw, &inner); decErr == nil && len(inner) > 0 {
+		// Only treat this as a double-wrap (and strip a layer) if the inner
+		// content is itself a CBOR byte string: first byte is a CBOR byte-string
+		// major type (0x40-0x5f) and it decodes cleanly as []byte.
+		if isCborByteString(inner) {
+			return hex.EncodeToString(inner), nil
+		}
+	}
+	return scriptHex, nil
+}
+
+// isCborByteString reports whether b begins with a CBOR byte-string major type
+// (major type 2, initial byte 0x40-0x5f) and decodes cleanly as a byte string.
+func isCborByteString(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	if b[0] < 0x40 || b[0] > 0x5f {
+		return false
+	}
+	var decoded []byte
+	_, err := cbor.Decode(b, &decoded)
+	return err == nil
 }
 
 // GetUtxoByUnit finds the single UTxO containing a specific unit (NFT).
 func (m *MaestroProvider) GetUtxoByUnit(
 	ctx context.Context,
 	unit string,
-) (*UTxO.UTxO, error) {
+) (*common.Utxo, error) {
 	params := utils.NewParameters()
 	params.Count(2)
 
@@ -310,18 +335,19 @@ func (m *MaestroProvider) GetUtxoByUnit(
 func (m *MaestroProvider) GetUtxosByOutRef(
 	ctx context.Context,
 	outRefs []connector.OutRef,
-) ([]UTxO.UTxO, error) {
+) ([]common.Utxo, error) {
 	if len(outRefs) == 0 {
 		return nil, nil
 	}
 
-	results := make([]UTxO.UTxO, 0, len(outRefs))
-
-	params := utils.NewParameters()
-	params.WithCbor()
-	params.ResolveDatums()
+	results := make([]common.Utxo, 0, len(outRefs))
 
 	for _, ref := range outRefs {
+		// Request the resolved output CBOR and datums so inline datums and
+		// reference scripts hydrate completely (see maestroUtxoToCommon).
+		params := utils.NewParameters()
+		params.WithCbor()
+		params.ResolveDatums()
 		resp, err := m.client.TransactionOutputFromReference(
 			ref.TxHash,
 			int(ref.Index),
@@ -335,7 +361,17 @@ func (m *MaestroProvider) GetUtxosByOutRef(
 				err,
 			)
 		}
-		apolloUtxo, rawCbor, err := adaptMaestroUtxoToApolloUtxo(resp.Data)
+
+		address, err := common.NewAddress(resp.Data.Address)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"maestro: invalid address for utxo %s#%d: %w",
+				ref.TxHash,
+				ref.Index,
+				err,
+			)
+		}
+		utxo, err := maestroUtxoToCommon(resp.Data, address)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"maestro: failed to adapt utxo %s#%d: %w",
@@ -344,8 +380,7 @@ func (m *MaestroProvider) GetUtxosByOutRef(
 				err,
 			)
 		}
-		m.cacheRawCbor(resp.Data.TxHash, int(resp.Data.Index), rawCbor)
-		results = append(results, apolloUtxo)
+		results = append(results, utxo)
 	}
 	return results, nil
 }
@@ -383,35 +418,43 @@ func (m *MaestroProvider) GetDelegation(
 	return adaptMaestroDelegation(resp.Data, int(blockResp.Data.Epoch)), nil
 }
 
-// GetDatum fetches a datum by its hash.
+// GetDatum fetches a datum by its hash and decodes it into a gouroboros Datum.
 func (m *MaestroProvider) GetDatum(
 	ctx context.Context,
 	datumHash string,
-) (PlutusData.PlutusData, error) {
+) (common.Datum, error) {
 	resp, err := m.client.DatumFromHash(datumHash)
 	if err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
+		return common.Datum{}, fmt.Errorf(
 			"maestro: failed to get datum by hash %s: %w",
 			datumHash,
 			err,
 		)
 	}
 
+	if resp.Data.Bytes == "" {
+		return common.Datum{}, fmt.Errorf(
+			"maestro: no datum found for datum hash %s: %w",
+			datumHash,
+			connector.ErrNotFound,
+		)
+	}
+
 	datumBytes, err := hex.DecodeString(resp.Data.Bytes)
 	if err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
+		return common.Datum{}, fmt.Errorf(
 			"invalid datum cbor hex from maestro: %w",
 			err,
 		)
 	}
-	var pd PlutusData.PlutusData
-	if err := cbor.Unmarshal(datumBytes, &pd); err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
+	var datum common.Datum
+	if err := datum.UnmarshalCBOR(datumBytes); err != nil {
+		return common.Datum{}, fmt.Errorf(
 			"failed to unmarshal datum cbor: %w",
 			err,
 		)
 	}
-	return pd, nil
+	return datum, nil
 }
 
 // AwaitTx waits for a transaction to be confirmed.
@@ -449,53 +492,80 @@ func (m *MaestroProvider) AwaitTx(
 	}
 }
 
-// SubmitTx submits a signed transaction.
+// SubmitTx submits a signed transaction and returns its hash as a hex string.
 func (m *MaestroProvider) SubmitTx(
 	ctx context.Context,
 	txBytes []byte,
 ) (string, error) {
+	// The Maestro SDK's Client.SubmitTx posts to a corrupted URL
+	// ("/submitmodels.BasicResponse{}/tx") and can never work. Use
+	// TxManagerSubmit instead, which posts the hex-encoded transaction
+	// CBOR to the documented POST /txmanager submit endpoint.
 	txHex := hex.EncodeToString(txBytes)
-
-	resp, err := m.client.SubmitTx(txHex)
+	txHash, err := m.client.TxManagerSubmit(txHex)
 	if err != nil {
 		return "", fmt.Errorf("maestro: tx submission failed: %w", err)
 	}
-
-	if resp.Data == "" {
+	// The endpoint returns the tx hash as a plain-text body; tolerate JSON
+	// string quoting and surrounding whitespace.
+	txHash = strings.Trim(strings.TrimSpace(txHash), `"`)
+	if txHash == "" {
 		return "", errors.New(
 			"maestro did not return a transaction hash on submission",
 		)
 	}
-	return resp.Data, nil
+	return txHash, nil
 }
 
 // EvaluateTx evaluates a transaction's scripts.
+//
+// additionalUTxOs are forwarded to Maestro's /transactions/evaluate
+// additional_utxos field (an array of {tx_hash, index, txout_cbor} objects), so
+// this backend CAN evaluate transactions that spend inputs not yet visible
+// on-chain (off-chain or chained inputs), as long as each such input is
+// supplied here with its resolved output.
 func (m *MaestroProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
-	additional []UTxO.UTxO,
-) (map[string]Redeemer.ExecutionUnits, error) {
-	results := make(map[string]Redeemer.ExecutionUnits)
-	txHex := hex.EncodeToString(txBytes)
-
-	var additionalUtxos []models.AdditionalUtxo
-	if len(additional) > 0 {
-		maestroExtras, err := adaptApolloUtxosToMaestro(additional, m.lookupRawCbor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to adapt additional UTxOs: %w", err)
-		}
-		additionalUtxos = maestroExtras
-	}
-
-	evaluation, err := m.client.EvaluateTx(txHex, additionalUtxos...)
+	additionalUTxOs []common.Utxo,
+) (map[common.RedeemerKey]common.ExUnits, error) {
+	addl, err := maestroAdditionalUtxos(additionalUTxOs)
 	if err != nil {
 		return nil, err
 	}
-	for _, eval := range evaluation {
-		results[eval.RedeemerTag+":"+strconv.Itoa(eval.RedeemerIndex)] = Redeemer.ExecutionUnits{
-			Mem:   eval.ExUnits.Mem,
-			Steps: eval.ExUnits.Steps,
-		}
+	txHex := hex.EncodeToString(txBytes)
+	evaluation, err := m.client.EvaluateTx(txHex, addl...)
+	if err != nil {
+		return nil, err
 	}
-	return results, nil
+	return evaluationsToExUnits(evaluation)
+}
+
+// maestroAdditionalUtxos converts resolved gouroboros UTxOs into the Maestro
+// additional_utxos wire form. txout_cbor is the canonical CBOR encoding of the
+// resolved transaction OUTPUT (Babbage map form / Alonzo array form), produced
+// via the output's MarshalCBOR.
+func maestroAdditionalUtxos(utxos []common.Utxo) ([]models.AdditionalUtxo, error) {
+	if len(utxos) == 0 {
+		return nil, nil
+	}
+	addl := make([]models.AdditionalUtxo, 0, len(utxos))
+	for _, utxo := range utxos {
+		if utxo.Output == nil {
+			return nil, errors.New("maestro: additional UTxO has no resolved output")
+		}
+		outBytes, err := cbor.Encode(utxo.Output)
+		if err != nil {
+			return nil, fmt.Errorf("maestro: failed to encode additional UTxO output CBOR: %w", err)
+		}
+		if utxo.Id.Index() > math.MaxInt32 {
+			return nil, fmt.Errorf("maestro: additional UTxO index %d exceeds int range", utxo.Id.Index())
+		}
+		addl = append(addl, models.AdditionalUtxo{
+			TxHash:    hex.EncodeToString(utxo.Id.Id().Bytes()),
+			Index:     int(utxo.Id.Index()),
+			TxoutCbor: hex.EncodeToString(outBytes),
+		})
+	}
+	return addl, nil
 }

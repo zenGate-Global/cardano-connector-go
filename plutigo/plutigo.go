@@ -10,15 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	cbor "github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/cbor"
 	"github.com/blinklabs-io/gouroboros/ledger"
 	lcommon "github.com/blinklabs-io/gouroboros/ledger/common"
 	lscript "github.com/blinklabs-io/gouroboros/ledger/common/script"
-	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 	"github.com/blinklabs-io/plutigo/cek"
 	pdata "github.com/blinklabs-io/plutigo/data"
 	connector "github.com/zenGate-Global/cardano-connector-go"
@@ -26,8 +22,8 @@ import (
 
 type Config struct {
 	Provider               connector.Provider
-	ProtocolParamsOverride *Base.ProtocolParameters
-	GenesisParamsOverride  *Base.GenesisParameters
+	ProtocolParamsOverride *backend.ProtocolParameters
+	GenesisParamsOverride  *backend.GenesisParameters
 	SlotConfig             *SlotConfig
 }
 
@@ -39,8 +35,8 @@ type SlotConfig struct {
 
 type PlutigoProvider struct {
 	resolver               connector.Provider
-	protocolParamsOverride *Base.ProtocolParameters
-	genesisParamsOverride  *Base.GenesisParameters
+	protocolParamsOverride *backend.ProtocolParameters
+	genesisParamsOverride  *backend.GenesisParameters
 	slotConfig             *SlotConfig
 }
 
@@ -64,24 +60,24 @@ func Wrap(provider connector.Provider) (*PlutigoProvider, error) {
 	})
 }
 
-func (p *PlutigoProvider) GetProtocolParameters(ctx context.Context) (Base.ProtocolParameters, error) {
+func (p *PlutigoProvider) GetProtocolParameters(ctx context.Context) (backend.ProtocolParameters, error) {
 	if p.protocolParamsOverride != nil {
 		return *p.protocolParamsOverride, nil
 	}
 	if p.resolver != nil {
 		return p.resolver.GetProtocolParameters(ctx)
 	}
-	return Base.ProtocolParameters{}, notImplementedError("GetProtocolParameters")
+	return backend.ProtocolParameters{}, notImplementedError("GetProtocolParameters")
 }
 
-func (p *PlutigoProvider) GetGenesisParams(ctx context.Context) (Base.GenesisParameters, error) {
+func (p *PlutigoProvider) GetGenesisParams(ctx context.Context) (backend.GenesisParameters, error) {
 	if p.genesisParamsOverride != nil {
 		return *p.genesisParamsOverride, nil
 	}
 	if p.resolver != nil {
 		return p.resolver.GetGenesisParams(ctx)
 	}
-	return Base.GenesisParameters{}, notImplementedError("GetGenesisParams")
+	return backend.GenesisParameters{}, notImplementedError("GetGenesisParams")
 }
 
 func (p *PlutigoProvider) Network() int {
@@ -105,28 +101,28 @@ func (p *PlutigoProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 	return connector.Tip{}, notImplementedError("GetTip")
 }
 
-func (p *PlutigoProvider) GetUtxosByAddress(ctx context.Context, addr string) ([]UTxO.UTxO, error) {
+func (p *PlutigoProvider) GetUtxosByAddress(ctx context.Context, addr string) ([]lcommon.Utxo, error) {
 	if p.resolver != nil {
 		return p.resolver.GetUtxosByAddress(ctx, addr)
 	}
 	return nil, notImplementedError("GetUtxosByAddress")
 }
 
-func (p *PlutigoProvider) GetUtxosWithUnit(ctx context.Context, addr string, unit string) ([]UTxO.UTxO, error) {
+func (p *PlutigoProvider) GetUtxosWithUnit(ctx context.Context, addr string, unit string) ([]lcommon.Utxo, error) {
 	if p.resolver != nil {
 		return p.resolver.GetUtxosWithUnit(ctx, addr, unit)
 	}
 	return nil, notImplementedError("GetUtxosWithUnit")
 }
 
-func (p *PlutigoProvider) GetUtxoByUnit(ctx context.Context, unit string) (*UTxO.UTxO, error) {
+func (p *PlutigoProvider) GetUtxoByUnit(ctx context.Context, unit string) (*lcommon.Utxo, error) {
 	if p.resolver != nil {
 		return p.resolver.GetUtxoByUnit(ctx, unit)
 	}
 	return nil, notImplementedError("GetUtxoByUnit")
 }
 
-func (p *PlutigoProvider) GetUtxosByOutRef(ctx context.Context, outRefs []connector.OutRef) ([]UTxO.UTxO, error) {
+func (p *PlutigoProvider) GetUtxosByOutRef(ctx context.Context, outRefs []connector.OutRef) ([]lcommon.Utxo, error) {
 	if p.resolver != nil {
 		return p.resolver.GetUtxosByOutRef(ctx, outRefs)
 	}
@@ -140,11 +136,11 @@ func (p *PlutigoProvider) GetDelegation(ctx context.Context, rewardAddress strin
 	return connector.Delegation{}, notImplementedError("GetDelegation")
 }
 
-func (p *PlutigoProvider) GetDatum(ctx context.Context, datumHash string) (PlutusData.PlutusData, error) {
+func (p *PlutigoProvider) GetDatum(ctx context.Context, datumHash string) (lcommon.Datum, error) {
 	if p.resolver != nil {
 		return p.resolver.GetDatum(ctx, datumHash)
 	}
-	return PlutusData.PlutusData{}, notImplementedError("GetDatum")
+	return lcommon.Datum{}, notImplementedError("GetDatum")
 }
 
 func (p *PlutigoProvider) AwaitTx(ctx context.Context, txHash string, checkInterval time.Duration) (bool, error) {
@@ -171,8 +167,8 @@ func (p *PlutigoProvider) GetScriptCborByScriptHash(ctx context.Context, scriptH
 func (p *PlutigoProvider) EvaluateTx(
 	ctx context.Context,
 	tx []byte,
-	additionalUTxOs []UTxO.UTxO,
-) (map[string]Redeemer.ExecutionUnits, error) {
+	additionalUTxOs []lcommon.Utxo,
+) (map[lcommon.RedeemerKey]lcommon.ExUnits, error) {
 	txType, err := ledger.DetermineTransactionType(tx)
 	if err != nil {
 		return nil, classifiedError(connector.ErrInvalidInput, "determine transaction type", err)
@@ -192,7 +188,7 @@ func (p *PlutigoProvider) EvaluateTx(
 
 	witnesses := decodedTx.Witnesses()
 	if witnesses == nil || witnesses.Redeemers() == nil {
-		return map[string]Redeemer.ExecutionUnits{}, nil
+		return map[lcommon.RedeemerKey]lcommon.ExUnits{}, nil
 	}
 
 	resolvedInputsByKey, resolvedInputs, err := p.resolveInputs(ctx, decodedTx, additionalUTxOs)
@@ -220,7 +216,7 @@ func (p *PlutigoProvider) EvaluateTx(
 		mint = *decodedTx.AssetMint()
 	}
 
-	results := make(map[string]Redeemer.ExecutionUnits)
+	results := make(map[lcommon.RedeemerKey]lcommon.ExUnits)
 	for _, redeemerTag := range supportedRedeemerTags() {
 		for _, redeemerIndex := range witnesses.Redeemers().Indexes(redeemerTag) {
 			redeemerKey := lcommon.RedeemerKey{
@@ -341,9 +337,9 @@ func (p *PlutigoProvider) EvaluateTx(
 				return nil, classifiedError(connector.ErrNotImplemented, "unsupported Plutus script version", nil)
 			}
 
-			results[resultKey(redeemerKey)] = Redeemer.ExecutionUnits{
-				Mem:   usedBudget.Memory,
-				Steps: usedBudget.Steps,
+			results[redeemerKey] = lcommon.ExUnits{
+				Memory: usedBudget.Memory,
+				Steps:  usedBudget.Steps,
 			}
 		}
 	}
@@ -390,15 +386,11 @@ type resolvedScript struct {
 func (p *PlutigoProvider) resolveInputs(
 	ctx context.Context,
 	tx lcommon.Transaction,
-	additionalUTxOs []UTxO.UTxO,
+	additionalUTxOs []lcommon.Utxo,
 ) (map[string]lcommon.Utxo, []lcommon.Utxo, error) {
 	resolvedInputs := make(map[string]lcommon.Utxo, len(additionalUTxOs))
 	for _, utxo := range additionalUTxOs {
-		converted, err := apolloUtxoToLedger(utxo)
-		if err != nil {
-			return nil, nil, classifiedError(connector.ErrInvalidInput, "decode additional UTxO", err)
-		}
-		resolvedInputs[converted.Id.String()] = converted
+		resolvedInputs[utxo.Id.String()] = utxo
 	}
 
 	neededRefs := make([]connector.OutRef, 0)
@@ -431,12 +423,8 @@ func (p *PlutigoProvider) resolveInputs(
 			return nil, nil, classifiedError(connector.ErrNotFound, "resolve transaction inputs", err)
 		}
 		for _, utxo := range fetchedUtxos {
-			converted, err := apolloUtxoToLedger(utxo)
-			if err != nil {
-				return nil, nil, classifiedError(connector.ErrInvalidInput, "decode resolver UTxO", err)
-			}
-			if _, exists := resolvedInputs[converted.Id.String()]; !exists {
-				resolvedInputs[converted.Id.String()] = converted
+			if _, exists := resolvedInputs[utxo.Id.String()]; !exists {
+				resolvedInputs[utxo.Id.String()] = utxo
 			}
 		}
 	}
@@ -488,16 +476,12 @@ func (p *PlutigoProvider) resolveWitnessDatums(
 		if _, ok := witnessDatums[*datumHash]; ok {
 			continue
 		}
-		apolloDatum, err := p.resolver.GetDatum(ctx, datumHash.String())
+		ledgerDatum, err := p.resolver.GetDatum(ctx, datumHash.String())
 		if err != nil {
 			if errors.Is(err, connector.ErrNotFound) {
 				continue
 			}
 			return nil, classifiedError(connector.ErrNotFound, "resolve datum "+datumHash.String(), err)
-		}
-		ledgerDatum, err := apolloDatumToLedger(apolloDatum)
-		if err != nil {
-			return nil, classifiedError(connector.ErrInvalidInput, "decode datum "+datumHash.String(), err)
 		}
 		ledgerDatumCopy := ledgerDatum
 		witnessDatums[*datumHash] = &ledgerDatumCopy
@@ -508,13 +492,13 @@ func (p *PlutigoProvider) resolveWitnessDatums(
 
 func (p *PlutigoProvider) resolveProtocolParameters(
 	ctx context.Context,
-) (Base.ProtocolParameters, int64, int64, error) {
-	var params Base.ProtocolParameters
+) (backend.ProtocolParameters, int64, int64, error) {
+	var params backend.ProtocolParameters
 	if p.protocolParamsOverride != nil {
 		params = *p.protocolParamsOverride
 	} else {
 		if p.resolver == nil {
-			return Base.ProtocolParameters{}, 0, 0, classifiedError(
+			return backend.ProtocolParameters{}, 0, 0, classifiedError(
 				connector.ErrNotImplemented,
 				"protocol parameters are required but no resolver or override was provided",
 				nil,
@@ -522,13 +506,13 @@ func (p *PlutigoProvider) resolveProtocolParameters(
 		}
 		resolvedParams, err := p.resolver.GetProtocolParameters(ctx)
 		if err != nil {
-			return Base.ProtocolParameters{}, 0, 0, classifiedError(connector.ErrNotFound, "resolve protocol parameters", err)
+			return backend.ProtocolParameters{}, 0, 0, classifiedError(connector.ErrNotFound, "resolve protocol parameters", err)
 		}
 		params = resolvedParams
 	}
 
 	if params.ProtocolMajorVersion <= 0 {
-		return Base.ProtocolParameters{}, 0, 0, classifiedError(
+		return backend.ProtocolParameters{}, 0, 0, classifiedError(
 			connector.ErrNotImplemented,
 			"protocol major version is required for local evaluation",
 			nil,
@@ -537,11 +521,11 @@ func (p *PlutigoProvider) resolveProtocolParameters(
 
 	maxMem, err := parseInt64Param("max_tx_ex_mem", params.MaxTxExMem)
 	if err != nil {
-		return Base.ProtocolParameters{}, 0, 0, err
+		return backend.ProtocolParameters{}, 0, 0, err
 	}
 	maxSteps, err := parseInt64Param("max_tx_ex_steps", params.MaxTxExSteps)
 	if err != nil {
-		return Base.ProtocolParameters{}, 0, 0, err
+		return backend.ProtocolParameters{}, 0, 0, err
 	}
 
 	return params, maxMem, maxSteps, nil
@@ -556,7 +540,7 @@ func (p *PlutigoProvider) resolveSlotState(ctx context.Context) (localSlotState,
 		}, nil
 	}
 
-	var genesis Base.GenesisParameters
+	var genesis backend.GenesisParameters
 	if p.genesisParamsOverride != nil {
 		genesis = *p.genesisParamsOverride
 	} else {
@@ -617,45 +601,6 @@ func (p *PlutigoProvider) resolveScript(
 	return script, nil
 }
 
-func apolloUtxoToLedger(utxo UTxO.UTxO) (lcommon.Utxo, error) {
-	output := utxo.Output
-	outputCbor, err := output.MarshalCBOR()
-	if err != nil {
-		return lcommon.Utxo{}, fmt.Errorf("marshal transaction output: %w", err)
-	}
-	decodedOutput, err := ledger.NewTransactionOutputFromCbor(outputCbor)
-	if err != nil {
-		if output.IsPostAlonzo && output.PostAlonzo.ScriptRef != nil {
-			outputWithoutScriptRef := output.Clone()
-			outputWithoutScriptRef.PostAlonzo.ScriptRef = nil
-			outputCbor, marshalErr := outputWithoutScriptRef.MarshalCBOR()
-			if marshalErr == nil {
-				decodedOutput, err = ledger.NewTransactionOutputFromCbor(outputCbor)
-			}
-		}
-		if err != nil {
-			return lcommon.Utxo{}, fmt.Errorf("decode transaction output: %w", err)
-		}
-	}
-	input := shelley.NewShelleyTransactionInput(hex.EncodeToString(utxo.Input.TransactionId), utxo.Input.Index)
-	return lcommon.Utxo{
-		Id:     input,
-		Output: decodedOutput,
-	}, nil
-}
-
-func apolloDatumToLedger(datum PlutusData.PlutusData) (lcommon.Datum, error) {
-	cborBytes, err := datum.MarshalCBOR()
-	if err != nil {
-		return lcommon.Datum{}, fmt.Errorf("marshal datum: %w", err)
-	}
-	var wrapper pdata.PlutusDataWrapper
-	if err := wrapper.UnmarshalCBOR(cborBytes); err != nil {
-		return lcommon.Datum{}, fmt.Errorf("decode datum: %w", err)
-	}
-	return lcommon.Datum{Data: wrapper.Data}, nil
-}
-
 func buildScriptPurpose(
 	redeemerKey lcommon.RedeemerKey,
 	resolvedInputs map[string]lcommon.Utxo,
@@ -687,10 +632,10 @@ func buildScriptPurpose(
 }
 
 func buildEvalContext(
-	params Base.ProtocolParameters,
+	params backend.ProtocolParameters,
 	version scriptVersion,
 ) (*cek.EvalContext, error) {
-	costModel, err := costModelForVersion(params.CostModelsRaw, version)
+	costModel, err := costModelForVersion(params.CostModels, version)
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +699,7 @@ func decodeResolvedScript(scriptCborHex string, scriptHash string) (resolvedScri
 
 	candidates := [][]byte{raw}
 	var inner []byte
-	if err := cbor.Unmarshal(raw, &inner); err == nil && len(inner) > 0 {
+	if _, err := cbor.Decode(raw, &inner); err == nil && len(inner) > 0 {
 		candidates = append(candidates, inner)
 	}
 

@@ -1,10 +1,8 @@
 package maestro
 
 import (
-	"sync"
-
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/maestro-org/go-sdk/client"
+	"github.com/Salvionied/apollo/v2/backend"
+	maestroClient "github.com/maestro-org/go-sdk/client"
 )
 
 type Config struct {
@@ -18,25 +16,18 @@ type Config struct {
 	NetworkId int
 
 	// ProtocolParamsOverride overrides both live Maestro protocol parameters and the built-in preset.
-	ProtocolParamsOverride *Base.ProtocolParameters
+	ProtocolParamsOverride *backend.ProtocolParameters
 
 	// GenesisParamsOverride overrides the built-in per-network genesis preset.
-	GenesisParamsOverride *Base.GenesisParameters
+	GenesisParamsOverride *backend.GenesisParameters
 }
 
 // MaestroProvider implements the connector.Provider interface for the Maestro API.
 type MaestroProvider struct {
-	client                 *client.Client
-	genesisParams          Base.GenesisParameters
-	protocolParamsOverride *Base.ProtocolParameters
-	protocolParamsPreset   Base.ProtocolParameters
+	client                 *maestroClient.Client
+	genesisParams          backend.GenesisParameters
+	protocolParamsOverride *backend.ProtocolParameters
+	protocolParamsPreset   backend.ProtocolParameters
 	networkId              int
 	networkName            string
-
-	// rawCborCache preserves the original txout_cbor hex strings returned by
-	// Maestro so they can be passed back verbatim during EvaluateTx. Apollo's
-	// CBOR marshaling does not guarantee byte-identical output, and Maestro
-	// rejects re-encoded UTxOs as "Malformed additional UTxO".
-	// Key format: "txhash#index"
-	rawCborCache sync.Map
 }

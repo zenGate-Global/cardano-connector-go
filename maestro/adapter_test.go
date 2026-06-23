@@ -5,91 +5,216 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Salvionied/apollo/serialization/TransactionInput"
-	"github.com/Salvionied/apollo/serialization/TransactionOutput"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/cbor"
+	"github.com/blinklabs-io/gouroboros/ledger"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
+	"github.com/blinklabs-io/gouroboros/ledger/mary"
+	"github.com/blinklabs-io/gouroboros/ledger/shelley"
+	"github.com/maestro-org/go-sdk/models"
 )
 
-// TestCBORRoundTripPreservation demonstrates that CBOR encoding is not
-// guaranteed to be stable through an unmarshal/marshal cycle. While Apollo's
-// Go-constructed outputs may round-trip cleanly, real on-chain CBOR from
-// Maestro can use different encoding choices (integer widths, map key ordering,
-// indefinite-length containers) that Apollo's Marshal does not reproduce.
-func TestCBORRoundTripPreservation(t *testing.T) {
-	utxo := ApolloEvalSample2UTxOs[0]
+const maestroTestAddr = "addr_test1wpgexmeunzsykesf42d4eqet5yvzeap6trjnflxqtkcf66g0kpnxt"
 
-	reEncoded, err := cbor.Marshal(utxo.Output)
+// TestMaestroUtxoToCommonPrefersTxOutCbor asserts that when Maestro supplies the
+// resolved output CBOR (txout_cbor, requested via params.WithCbor()), the output
+// is decoded era-generically from those bytes rather than reconstructed from the
+// JSON fields.
+func TestMaestroUtxoToCommonPrefersTxOutCbor(t *testing.T) {
+	address, err := common.NewAddress(maestroTestAddr)
 	if err != nil {
-		t.Fatalf("cbor.Marshal failed: %v", err)
+		t.Fatalf("NewAddress failed: %v", err)
 	}
-
-	reEncodedFromPostAlonzo, err := cbor.Marshal(utxo.Output.PostAlonzo)
+	addrBytes, err := address.Bytes()
 	if err != nil {
-		t.Fatalf("cbor.Marshal PostAlonzo failed: %v", err)
+		t.Fatalf("address.Bytes failed: %v", err)
 	}
 
-	t.Logf("TransactionOutput marshal: %s", hex.EncodeToString(reEncoded))
-	t.Logf("PostAlonzo marshal:        %s", hex.EncodeToString(reEncodedFromPostAlonzo))
-
-	var roundTripped TransactionOutput.TransactionOutput
-	err = cbor.Unmarshal(reEncoded, &roundTripped)
+	// Minimal Babbage (map-encoded) transaction output: {0: address, 1: coin}.
+	const lovelace uint64 = 2_000_000
+	outBytes, err := cbor.Encode(map[int]any{0: addrBytes, 1: lovelace})
 	if err != nil {
-		t.Fatalf("cbor.Unmarshal of re-encoded bytes failed: %v", err)
+		t.Fatalf("encode output: %v", err)
 	}
 
-	roundTrippedAgain, err := cbor.Marshal(roundTripped)
+	raw := models.Utxo{
+		TxHash:    "b50e73e74a3073bc44f555928702c0ae0f555a43f1afdce34b3294247dce022d",
+		Index:     0,
+		Address:   maestroTestAddr,
+		TxOutCbor: hex.EncodeToString(outBytes),
+		// Intentionally leave Assets/Datum empty: the CBOR path must be used and
+		// must not depend on the JSON-field reconstruction.
+	}
+
+	utxo, err := maestroUtxoToCommon(raw, address)
 	if err != nil {
-		t.Fatalf("second cbor.Marshal failed: %v", err)
+		t.Fatalf("maestroUtxoToCommon failed: %v", err)
 	}
-
-	t.Logf("Round-trip stable: %v", hex.EncodeToString(reEncoded) == hex.EncodeToString(roundTrippedAgain))
-}
-
-func TestNormalizeMaestroCostModels(t *testing.T) {
-	raw := map[string]any{
-		"plutus_v1": []any{int64(100), float64(200), int64(300)},
-		"plutus_v2": []any{float64(1), float64(2), float64(3)},
-		"plutus_v3": []any{int64(9), int64(8), int64(7)},
+	if got := utxo.Output.Amount(); got == nil || got.Uint64() != lovelace {
+		t.Fatalf("decoded lovelace = %v, want %d", got, lovelace)
 	}
-
-	costModels, err := normalizeMaestroCostModels(raw)
-	if err != nil {
-		t.Fatalf("normalizeMaestroCostModels failed: %v", err)
-	}
-
-	expected := map[string][]int64{
-		"PlutusV1": []int64{100, 200, 300},
-		"PlutusV2": []int64{1, 2, 3},
-		"PlutusV3": []int64{9, 8, 7},
-	}
-
-	if !reflect.DeepEqual(expected, costModels) {
-		t.Fatalf("unexpected cost models: got %#v want %#v", costModels, expected)
+	if utxo.Id.Index() != 0 {
+		t.Fatalf("decoded index = %d, want 0", utxo.Id.Index())
 	}
 }
 
-func TestNormalizeMaestroCostModelsRejectsMapEncodedVectors(t *testing.T) {
-	raw := map[string]any{
-		"plutus_v2": map[string]any{
-			"0": 1,
-			"1": 2,
-		},
+// TestMaestroUtxoToCommonFallsBackToJSONFields asserts that when txout_cbor is
+// absent, the output is reconstructed from the JSON asset/datum fields.
+func TestMaestroUtxoToCommonFallsBackToJSONFields(t *testing.T) {
+	address, err := common.NewAddress(maestroTestAddr)
+	if err != nil {
+		t.Fatalf("NewAddress failed: %v", err)
 	}
 
-	if _, err := normalizeMaestroCostModels(raw); err == nil {
-		t.Fatal("expected normalizeMaestroCostModels to reject map-encoded vectors")
+	raw := models.Utxo{
+		TxHash:  "b50e73e74a3073bc44f555928702c0ae0f555a43f1afdce34b3294247dce022d",
+		Index:   0,
+		Address: maestroTestAddr,
+		Assets:  []models.Asset{{Unit: "lovelace", Amount: 3_000_000}},
+	}
+
+	utxo, err := maestroUtxoToCommon(raw, address)
+	if err != nil {
+		t.Fatalf("maestroUtxoToCommon failed: %v", err)
+	}
+	if got := utxo.Output.Amount(); got == nil || got.Uint64() != 3_000_000 {
+		t.Fatalf("decoded lovelace = %v, want 3000000", got)
+	}
+}
+
+// baseMaestroParams returns a models.ProtocolParams populated with the minimal
+// scalar/fraction fields that adaptMaestroProtocolParams requires (so the
+// fraction and version parsing does not error), leaving cost models to the
+// individual test to set.
+func baseMaestroParams() models.ProtocolParams {
+	return models.ProtocolParams{
+		ScriptExecutionPrices:    models.StringExUnits{Memory: "577/10000", Cpu: "721/10000000"},
+		StakePoolPledgeInfluence: "3/10",
+		MonetaryExpansion:        "3/1000",
+		TreasuryExpansion:        "1/5",
+		ProtocolVersion:          models.ProtocolVersion{Major: 10, Minor: 0},
+	}
+}
+
+// TestAdaptMaestroProtocolParamsCostModelsArrayShape asserts that array-encoded
+// cost-model vectors are parsed into the canonical PlutusVN keys with their
+// values preserved in order.
+func TestAdaptMaestroProtocolParamsCostModelsArrayShape(t *testing.T) {
+	data := baseMaestroParams()
+	data.PlutusCostModels = map[string]any{
+		"plutus:v1": []any{float64(100), float64(200), float64(300)},
+		"plutus:v2": []any{float64(1), float64(2)},
+	}
+
+	pp, err := adaptMaestroProtocolParams(data)
+	if err != nil {
+		t.Fatalf("adaptMaestroProtocolParams failed: %v", err)
+	}
+
+	want := map[string][]int64{
+		"PlutusV1": {100, 200, 300},
+		"PlutusV2": {1, 2},
+	}
+	if !reflect.DeepEqual(pp.CostModels, want) {
+		t.Fatalf("cost models = %+v, want %+v", pp.CostModels, want)
+	}
+}
+
+// TestAdaptMaestroProtocolParamsRejectsMapEncodedCostModels asserts that a
+// map-encoded cost-model vector (keyed parameter names instead of an ordered
+// array) is rejected rather than silently dropped or mis-ordered.
+func TestAdaptMaestroProtocolParamsRejectsMapEncodedCostModels(t *testing.T) {
+	data := baseMaestroParams()
+	data.PlutusCostModels = map[string]any{
+		"plutus:v1": map[string]any{"addInteger-cpu-arguments-intercept": float64(100)},
+	}
+
+	if _, err := adaptMaestroProtocolParams(data); err == nil {
+		t.Fatal("expected error for map-encoded cost model vector, got nil")
+	}
+}
+
+// TestAdaptMaestroProtocolParamsRejectsNonIntegralCost asserts that a
+// non-integral cost value is rejected rather than truncated.
+func TestAdaptMaestroProtocolParamsRejectsNonIntegralCost(t *testing.T) {
+	data := baseMaestroParams()
+	data.PlutusCostModels = map[string]any{
+		"plutus:v1": []any{float64(1.5)},
+	}
+
+	if _, err := adaptMaestroProtocolParams(data); err == nil {
+		t.Fatal("expected error for non-integral cost value, got nil")
+	}
+}
+
+// TestAdaptMaestroProtocolParamsMapsLiveRatioAndVersionFields asserts that the
+// ratio/version fields Maestro supplies live (pool influence, monetary/treasury
+// expansion, protocol version) are mapped, not left zero for the preset.
+func TestAdaptMaestroProtocolParamsMapsLiveRatioAndVersionFields(t *testing.T) {
+	data := baseMaestroParams()
+	data.PlutusCostModels = map[string]any{}
+
+	pp, err := adaptMaestroProtocolParams(data)
+	if err != nil {
+		t.Fatalf("adaptMaestroProtocolParams failed: %v", err)
+	}
+
+	if pp.PoolInfluence != 0.3 {
+		t.Errorf("PoolInfluence = %v, want 0.3", pp.PoolInfluence)
+	}
+	if pp.MonetaryExpansion != 0.003 {
+		t.Errorf("MonetaryExpansion = %v, want 0.003", pp.MonetaryExpansion)
+	}
+	if pp.TreasuryExpansion != 0.2 {
+		t.Errorf("TreasuryExpansion = %v, want 0.2", pp.TreasuryExpansion)
+	}
+	if pp.ProtocolMajorVersion != 10 {
+		t.Errorf("ProtocolMajorVersion = %d, want 10", pp.ProtocolMajorVersion)
+	}
+}
+
+// Cost-model shape coverage that previously lived in TestNormalizeMaestroCostModels
+// (apollo v1) is reimplemented against the v2 types in
+// TestAdaptMaestroProtocolParamsCostModels* below, which exercise
+// adaptMaestroProtocolParams' inline parsing + maestroCostModelKey directly.
+//
+// TODO(apollo-v2): The following tests were removed during the apollo v2 /
+// gouroboros migration because the code they exercised no longer exists:
+//   - TestCBORRoundTripPreservation: relied on apollo v1 TransactionOutput CBOR
+//     round-tripping.
+//   - TestAdaptApolloUtxosToMaestro_* and the rawCbor cache tests
+//     (TestMaestroProvider_CacheRawCbor, TestMaestroProvider_EvaluateUsesCache,
+//     TestUtxoCacheKey, TestMaestroRoundTrip_SimulateFullFlow): the additional-
+//     UTxO adapter and the rawCbor cache were dropped because the maestro v2
+//     EvaluateTx IGNORES additionalUTxOs (SDK type cannot represent the
+//     documented wire format). Re-add coverage if/when the SDK gains object-
+//     shaped additional_utxos support.
+
+func TestMaestroCostModelKey(t *testing.T) {
+	cases := map[string]string{
+		"plutus:v1": "PlutusV1",
+		"plutus:v2": "PlutusV2",
+		"plutus:v3": "PlutusV3",
+		"plutus_v1": "PlutusV1",
+		"plutus_v2": "PlutusV2",
+		"plutus_v3": "PlutusV3",
+		"unknown":   "unknown",
+	}
+	for in, want := range cases {
+		if got := maestroCostModelKey(in); got != want {
+			t.Errorf("maestroCostModelKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
 func TestMergeMaestroProtocolParamsUsesPresetForMissingFields(t *testing.T) {
-	current := Base.ProtocolParameters{
+	current := backend.ProtocolParameters{
 		MinFeeConstant:   1,
 		CoinsPerUtxoByte: "4310",
 		CoinsPerUtxoWord: "0",
 	}
-	preset := Base.ProtocolParameters{
+	preset := backend.ProtocolParameters{
 		MinUtxo:                          "4310",
 		CoinsPerUtxoWord:                 "4310",
 		MinFeeReferenceScriptsMultiplier: 15,
@@ -114,224 +239,145 @@ func TestMergeMaestroProtocolParamsUsesPresetForMissingFields(t *testing.T) {
 	}
 }
 
-// TestAdaptApolloUtxosToMaestro_NoCache verifies the adapter produces valid
-// output structs when no CBOR cache is available (falls back to re-marshaling).
-func TestAdaptApolloUtxosToMaestro_NoCache(t *testing.T) {
-	result, err := adaptApolloUtxosToMaestro(ApolloEvalSample1UTxOs, nil)
+// TestUnwrapMaestroScriptCborDoubleWrapped asserts that a double-CBOR-wrapped
+// script (Maestro's form) has exactly one byte-string layer stripped, yielding
+// the canonical single-wrapped form.
+func TestUnwrapMaestroScriptCborDoubleWrapped(t *testing.T) {
+	// Canonical single-wrapped Plutus script: a CBOR byte string wrapping raw
+	// (flat) UPLC bytes.
+	uplc := []byte{0x01, 0x00, 0x00, 0x22, 0x00, 0x11}
+	single, err := cbor.Encode(uplc)
 	if err != nil {
-		t.Fatalf("adaptApolloUtxosToMaestro failed: %v", err)
+		t.Fatalf("encode single: %v", err)
 	}
-
-	if len(result) != len(ApolloEvalSample1UTxOs) {
-		t.Fatalf("expected %d additional utxos, got %d", len(ApolloEvalSample1UTxOs), len(result))
-	}
-
-	for i, au := range result {
-		expectedHash := hex.EncodeToString(ApolloEvalSample1UTxOs[i].Input.TransactionId)
-		if au.TxHash != expectedHash {
-			t.Errorf("[%d] expected tx hash %s, got %s", i, expectedHash, au.TxHash)
-		}
-		if au.Index != ApolloEvalSample1UTxOs[i].Input.Index {
-			t.Errorf("[%d] expected index %d, got %d", i, ApolloEvalSample1UTxOs[i].Input.Index, au.Index)
-		}
-		if au.TxoutCbor == "" {
-			t.Errorf("[%d] txout_cbor is empty", i)
-		}
-	}
-}
-
-// TestAdaptApolloUtxosToMaestro_WithCache verifies the adapter uses cached
-// raw CBOR when available instead of re-marshaling through Apollo.
-func TestAdaptApolloUtxosToMaestro_WithCache(t *testing.T) {
-	// Simulate a known "original" CBOR string from Maestro
-	const fakeMaestroCbor = "deadbeef01020304"
-	txHash := hex.EncodeToString(ApolloEvalSample2UTxOs[0].Input.TransactionId)
-	idx := ApolloEvalSample2UTxOs[0].Input.Index
-	cacheKey := utxoCacheKey(txHash, idx)
-
-	cache := map[string]string{
-		cacheKey: fakeMaestroCbor,
-	}
-	lookup := func(key string) (string, bool) {
-		v, ok := cache[key]
-		return v, ok
-	}
-
-	result, err := adaptApolloUtxosToMaestro(ApolloEvalSample2UTxOs, lookup)
+	// Maestro's double wrap: an outer byte string around the canonical form.
+	double, err := cbor.Encode(single)
 	if err != nil {
-		t.Fatalf("adaptApolloUtxosToMaestro failed: %v", err)
+		t.Fatalf("encode double: %v", err)
 	}
 
-	if len(result) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(result))
-	}
-
-	if result[0].TxoutCbor != fakeMaestroCbor {
-		t.Errorf("expected cached CBOR %q, got %q", fakeMaestroCbor, result[0].TxoutCbor)
-	}
-}
-
-// TestAdaptApolloUtxosToMaestro_CacheMiss verifies the adapter falls back
-// to re-marshaling when the cache doesn't have the UTxO.
-func TestAdaptApolloUtxosToMaestro_CacheMiss(t *testing.T) {
-	cache := map[string]string{} // empty cache
-	lookup := func(key string) (string, bool) {
-		v, ok := cache[key]
-		return v, ok
-	}
-
-	result, err := adaptApolloUtxosToMaestro(ApolloEvalSample1UTxOs[:1], lookup)
+	got, err := unwrapMaestroScriptCbor(hex.EncodeToString(double))
 	if err != nil {
-		t.Fatalf("adaptApolloUtxosToMaestro failed: %v", err)
+		t.Fatalf("unwrapMaestroScriptCbor failed: %v", err)
 	}
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(result))
+	if got != hex.EncodeToString(single) {
+		t.Fatalf("double-wrapped: got %s, want canonical single form %s", got, hex.EncodeToString(single))
 	}
+}
 
-	// Should have re-marshaled (not empty)
-	if result[0].TxoutCbor == "" {
-		t.Error("txout_cbor should not be empty on cache miss")
-	}
-
-	// Verify the re-marshaled output is valid CBOR
-	decoded, err := hex.DecodeString(result[0].TxoutCbor)
+// TestUnwrapMaestroScriptCborSingleWrappedUnchanged asserts that a canonical
+// single-wrapped script (the form Blockfrost/Kupo/the fixture use) is returned
+// unchanged, NOT over-stripped to raw UPLC.
+func TestUnwrapMaestroScriptCborSingleWrappedUnchanged(t *testing.T) {
+	// Raw UPLC must not begin with a CBOR byte-string major type (0x40-0x5f);
+	// 0x01 is a small unsigned int header, which is what real flat UPLC starts
+	// with, so it is correctly detected as "not a byte string".
+	uplc := []byte{0x01, 0x00, 0x00, 0x22, 0x00, 0x11}
+	single, err := cbor.Encode(uplc)
 	if err != nil {
-		t.Fatalf("invalid hex in txout_cbor: %v", err)
+		t.Fatalf("encode single: %v", err)
 	}
-	var output TransactionOutput.TransactionOutput
-	if err := cbor.Unmarshal(decoded, &output); err != nil {
-		t.Fatalf("re-marshaled CBOR is not valid TransactionOutput: %v", err)
-	}
-}
+	singleHex := hex.EncodeToString(single)
 
-// TestMaestroProvider_CacheRawCbor verifies the provider's caching methods.
-func TestMaestroProvider_CacheRawCbor(t *testing.T) {
-	p := &MaestroProvider{}
-
-	p.cacheRawCbor("abc123", 0, "deadbeef")
-	p.cacheRawCbor("abc123", 1, "cafebabe")
-
-	got, ok := p.lookupRawCbor("abc123#0")
-	if !ok || got != "deadbeef" {
-		t.Errorf("expected deadbeef, got %q (ok=%v)", got, ok)
-	}
-
-	got, ok = p.lookupRawCbor("abc123#1")
-	if !ok || got != "cafebabe" {
-		t.Errorf("expected cafebabe, got %q (ok=%v)", got, ok)
-	}
-
-	_, ok = p.lookupRawCbor("nonexistent#0")
-	if ok {
-		t.Error("expected cache miss for nonexistent key")
-	}
-}
-
-// TestMaestroProvider_EvaluateUsesCache is an integration-style test verifying
-// that EvaluateTx would use cached CBOR. We test this by exercising the
-// adapter with the provider's lookup method.
-func TestMaestroProvider_EvaluateUsesCache(t *testing.T) {
-	p := &MaestroProvider{}
-
-	// Simulate caching UTxOs from a prior fetch
-	for _, u := range ApolloEvalSample1UTxOs {
-		txHash := hex.EncodeToString(u.Input.TransactionId)
-		// Use a known "original" CBOR to distinguish from re-marshaled
-		fakeCbor := "original_" + txHash[:8]
-		p.cacheRawCbor(txHash, u.Input.Index, fakeCbor)
-	}
-
-	// The adapter should use cached values
-	result, err := adaptApolloUtxosToMaestro(ApolloEvalSample1UTxOs, p.lookupRawCbor)
+	got, err := unwrapMaestroScriptCbor(singleHex)
 	if err != nil {
-		t.Fatalf("adaptApolloUtxosToMaestro failed: %v", err)
+		t.Fatalf("unwrapMaestroScriptCbor failed: %v", err)
 	}
-
-	for i, au := range result {
-		txHash := hex.EncodeToString(ApolloEvalSample1UTxOs[i].Input.TransactionId)
-		expected := "original_" + txHash[:8]
-		if au.TxoutCbor != expected {
-			t.Errorf("[%d] expected cached CBOR %q, got %q", i, expected, au.TxoutCbor)
-		}
+	if got != singleHex {
+		t.Fatalf("single-wrapped form must be unchanged: got %s, want %s", got, singleHex)
 	}
 }
 
-// TestUtxoCacheKey verifies the cache key format.
-func TestUtxoCacheKey(t *testing.T) {
-	tests := []struct {
-		txHash   string
-		index    int
-		expected string
-	}{
-		{"abc123", 0, "abc123#0"},
-		{"def456", 42, "def456#42"},
-		{"", 0, "#0"},
+// TestMaestroAdditionalUtxos asserts that resolved UTxOs are converted into the
+// Maestro additional_utxos wire form: tx_hash + index from the input, and
+// txout_cbor = the canonical CBOR of the resolved output (round-trips back to an
+// equivalent output).
+func TestMaestroAdditionalUtxos(t *testing.T) {
+	const txHashHex = "b50e73e74a3073bc44f555928702c0ae0f555a43f1afdce34b3294247dce022d"
+	const lovelace uint64 = 11977490
+	address, err := common.NewAddress("addr_test1wpgexmeunzsykesf42d4eqet5yvzeap6trjnflxqtkcf66g0kpnxt")
+	if err != nil {
+		t.Fatalf("NewAddress failed: %v", err)
 	}
-	for _, tt := range tests {
-		got := utxoCacheKey(tt.txHash, tt.index)
-		if got != tt.expected {
-			t.Errorf("utxoCacheKey(%q, %d) = %q, want %q", tt.txHash, tt.index, got, tt.expected)
-		}
+	txHashBytes, err := hex.DecodeString(txHashHex)
+	if err != nil {
+		t.Fatalf("decode tx hash: %v", err)
 	}
-}
-
-// TestMaestroRoundTrip_SimulateFullFlow simulates the full flow:
-// 1. Maestro returns a UTxO with txout_cbor
-// 2. We decode it and cache the raw CBOR
-// 3. We need to send it back for evaluation
-// 4. The adapter uses the cached original bytes
-func TestMaestroRoundTrip_SimulateFullFlow(t *testing.T) {
-	p := &MaestroProvider{}
-
-	// Simulate what adaptMaestroUtxoToApolloUtxo returns
-	simOutput := TransactionOutput.TransactionOutput{
-		IsPostAlonzo: true,
-		PostAlonzo: TransactionOutput.TransactionOutputAlonzo{
-			Address:   evalSample2Addr,
-			Amount:    assetsToApolloValue(14000000, nil).ToAlonzoValue(),
-			Datum:     datumHexToApolloDatumOption("d87980"),
-			ScriptRef: evalSample2ScriptRef,
+	var txId common.Blake2b256
+	copy(txId[:], txHashBytes)
+	utxo := common.Utxo{
+		Id: shelley.ShelleyTransactionInput{TxId: txId, OutputIndex: 0},
+		Output: &babbage.BabbageTransactionOutput{
+			OutputAddress: address,
+			OutputAmount:  mary.MaryTransactionOutputValue{Amount: lovelace},
 		},
 	}
 
-	// Get "original" CBOR as Maestro would serve it
-	originalCbor, err := cbor.Marshal(simOutput)
+	addl, err := maestroAdditionalUtxos([]common.Utxo{utxo})
 	if err != nil {
-		t.Fatalf("Failed to create original CBOR: %v", err)
+		t.Fatalf("maestroAdditionalUtxos failed: %v", err)
 	}
-	originalHex := hex.EncodeToString(originalCbor)
+	if len(addl) != 1 {
+		t.Fatalf("expected 1 additional utxo, got %d", len(addl))
+	}
+	got := addl[0]
 
-	// Cache the raw CBOR (simulating what GetUtxosByAddress does)
-	txHash := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	p.cacheRawCbor(txHash, 0, originalHex)
+	if got.TxHash != txHashHex {
+		t.Errorf("tx_hash: got %s, want %s", got.TxHash, txHashHex)
+	}
+	if got.Index != 0 {
+		t.Errorf("index: got %d, want 0", got.Index)
+	}
 
-	// Decode into Apollo (simulating adaptMaestroUtxoToApolloUtxo)
-	var decoded TransactionOutput.TransactionOutput
-	err = cbor.Unmarshal(originalCbor, &decoded)
+	// txout_cbor must be the canonical output CBOR: decode it back (era-generic)
+	// and confirm it matches the original output's address and lovelace.
+	outBytes, err := hex.DecodeString(got.TxoutCbor)
 	if err != nil {
-		t.Fatalf("Failed to decode CBOR: %v", err)
+		t.Fatalf("invalid txout_cbor hex: %v", err)
 	}
-
-	// Build the UTxO that would be passed to EvaluateTx
-	utxo := UTxO.UTxO{
-		Input: TransactionInput.TransactionInput{
-			TransactionId: mustDecodeHex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
-			Index:         0,
-		},
-		Output: decoded,
-	}
-
-	// Run the adapter with the provider's cache
-	result, err := adaptApolloUtxosToMaestro([]UTxO.UTxO{utxo}, p.lookupRawCbor)
+	decoded, err := ledger.NewTransactionOutputFromCbor(outBytes)
 	if err != nil {
-		t.Fatalf("adaptApolloUtxosToMaestro failed: %v", err)
+		t.Fatalf("txout_cbor did not decode as an output: %v", err)
 	}
+	if decoded.Address().String() != address.String() {
+		t.Errorf("decoded address mismatch: %s != %s", decoded.Address().String(), address.String())
+	}
+	if decoded.Amount().Uint64() != lovelace {
+		t.Errorf("decoded lovelace mismatch: %d != %d", decoded.Amount().Uint64(), lovelace)
+	}
+}
 
-	// The CBOR should be the original bytes, not re-marshaled
-	if result[0].TxoutCbor != originalHex {
-		t.Errorf("adapter did not preserve original CBOR")
-		t.Logf("  Expected: %s", originalHex)
-		t.Logf("  Got:      %s", result[0].TxoutCbor)
+// TestMaestroAdditionalUtxosEmpty asserts an empty input yields no additional
+// UTxOs and no error.
+func TestMaestroAdditionalUtxosEmpty(t *testing.T) {
+	addl, err := maestroAdditionalUtxos(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addl != nil {
+		t.Fatalf("expected nil, got %+v", addl)
+	}
+}
+
+// TestParseRedeemerPurposeWdrl asserts the Conway short tag "wdrl" (which Maestro
+// emits for withdrawal redeemers) maps to the reward/withdraw tag.
+func TestParseRedeemerPurposeWdrl(t *testing.T) {
+	for _, s := range []string{"wdrl", "WDRL", "withdrawal", "withdraw", "reward"} {
+		tag, err := parseRedeemerPurpose(s)
+		if err != nil {
+			t.Fatalf("parseRedeemerPurpose(%q) failed: %v", s, err)
+		}
+		if tag != common.RedeemerTagReward {
+			t.Errorf("parseRedeemerPurpose(%q) = %v, want RedeemerTagReward", s, tag)
+		}
+	}
+	for _, s := range []string{"certificate", "cert", "publish"} {
+		tag, err := parseRedeemerPurpose(s)
+		if err != nil {
+			t.Fatalf("parseRedeemerPurpose(%q) failed: %v", s, err)
+		}
+		if tag != common.RedeemerTagCert {
+			t.Errorf("parseRedeemerPurpose(%q) = %v, want RedeemerTagCert", s, tag)
+		}
 	}
 }

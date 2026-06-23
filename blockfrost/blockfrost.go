@@ -8,15 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Salvionied/apollo/serialization/PlutusData"
-	"github.com/Salvionied/apollo/serialization/Redeemer"
-	"github.com/Salvionied/apollo/serialization/UTxO"
-	"github.com/Salvionied/apollo/txBuilding/Backend/Base"
-	"github.com/Salvionied/cbor/v2"
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/ledger/babbage"
+	"github.com/blinklabs-io/gouroboros/ledger/common"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
@@ -50,8 +50,6 @@ func New(config Config) (*BlockfrostProvider, error) {
 			)
 		}
 	} else {
-		// If a custom baseURL is provided, ensure it doesn't end with /v0 if it's a blockfrost URL
-		// or add /v0 if it's a blockfrost domain without it. This logic might need refinement.
 		if strings.Contains(baseURL, "blockfrost.io") && !strings.HasSuffix(baseURL, "/v0") {
 			baseURL += "/v0"
 		}
@@ -87,46 +85,46 @@ func (b *BlockfrostProvider) Epoch(ctx context.Context) (int, error) {
 // GetProtocolParameters fetches the current protocol parameters from Blockfrost.
 func (b *BlockfrostProvider) GetProtocolParameters(
 	ctx context.Context,
-) (Base.ProtocolParameters, error) {
-	var bfParams BlockfrostProtocolParameters
+) (backend.ProtocolParameters, error) {
+	var raw bfProtocolParams
 	path := "/epochs/latest/parameters"
 
-	err := b.doRequest(ctx, "GET", path, nil, &bfParams)
+	err := b.doRequest(ctx, "GET", path, nil, &raw)
 	if err != nil {
-		return Base.ProtocolParameters{}, fmt.Errorf(
+		return backend.ProtocolParameters{}, fmt.Errorf(
 			"failed to get protocol parameters: %w",
 			err,
 		)
 	}
 
-	return bfParams.ToBaseParams(), nil
+	return raw.toProtocolParams()
 }
 
 func (b *BlockfrostProvider) GetGenesisParams(
 	ctx context.Context,
-) (Base.GenesisParameters, error) {
-	var bfGenesisParams BlockfrostGenesisParameters
+) (backend.GenesisParameters, error) {
+	var raw bfGenesisParams
 	path := "/genesis"
 
-	err := b.doRequest(ctx, "GET", path, nil, &bfGenesisParams)
+	err := b.doRequest(ctx, "GET", path, nil, &raw)
 	if err != nil {
-		return Base.GenesisParameters{}, fmt.Errorf(
-			"failed to get protocol parameters: %w",
+		return backend.GenesisParameters{}, fmt.Errorf(
+			"failed to get genesis parameters: %w",
 			err,
 		)
 	}
 
-	return Base.GenesisParameters{
-		ActiveSlotsCoefficient: bfGenesisParams.ActiveSlotsCoefficient,
-		UpdateQuorum:           bfGenesisParams.UpdateQuorum,
-		MaxLovelaceSupply:      bfGenesisParams.MaxLovelaceSupply,
-		NetworkMagic:           bfGenesisParams.NetworkMagic,
-		EpochLength:            bfGenesisParams.EpochLength,
-		SystemStart:            bfGenesisParams.SystemStart,
-		SlotsPerKesPeriod:      bfGenesisParams.SlotsPerKesPeriod,
-		SlotLength:             bfGenesisParams.SlotLength,
-		MaxKesEvolutions:       bfGenesisParams.MaxKesEvolutions,
-		SecurityParam:          bfGenesisParams.SecurityParam,
+	return backend.GenesisParameters{
+		ActiveSlotsCoefficient: raw.ActiveSlotsCoefficient,
+		UpdateQuorum:           raw.UpdateQuorum,
+		MaxLovelaceSupply:      strconv.FormatInt(raw.MaxLovelaceSupply, 10),
+		NetworkMagic:           raw.NetworkMagic,
+		EpochLength:            raw.EpochLength,
+		SystemStart:            raw.SystemStart,
+		SlotsPerKesPeriod:      raw.SlotsPerKesPeriod,
+		SlotLength:             raw.SlotLength,
+		MaxKesEvolutions:       raw.MaxKesEvolutions,
+		SecurityParam:          raw.SecurityParam,
 	}, nil
 }
 
@@ -182,7 +180,6 @@ func (b *BlockfrostProvider) doRequest(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Attempt to parse Blockfrost error structure
 		var bfError struct {
 			StatusCode int    `json:"status_code"`
 			Err        string `json:"error"`
@@ -206,7 +203,6 @@ func (b *BlockfrostProvider) doRequest(
 				bfError.Message,
 			)
 		}
-		// Fallback generic error
 		if resp.StatusCode == http.StatusNotFound {
 			return fmt.Errorf(
 				"blockfrost API error: status %d - %s. Body: %s: %w",
@@ -244,123 +240,110 @@ func (b *BlockfrostProvider) doRequest(
 func (b *BlockfrostProvider) GetUtxosByAddress(
 	ctx context.Context,
 	addr string,
-) ([]UTxO.UTxO, error) {
-	var allBfUtxos []BlockfrostUTXO
-	page := 1
-
-	for {
-		var bfUtxos []BlockfrostUTXO
-		path := fmt.Sprintf("/addresses/%s/utxos?page=%d", addr, page)
-		err := b.doRequest(ctx, "GET", path, nil, &bfUtxos)
-		if err != nil {
-			if page == 1 && errors.Is(err, connector.ErrNotFound) {
-				return []UTxO.UTxO{}, nil
-			}
-			return nil, err
-		}
-
-		if len(bfUtxos) == 0 {
-			break
-		}
-
-		allBfUtxos = append(allBfUtxos, bfUtxos...)
-
-		if len(bfUtxos) < 100 {
-			break
-		}
-		page++
-	}
-
-	return adaptBlockfrostAddressUTxOs(allBfUtxos, addr, ctx, b), nil
-}
-
-func (b *BlockfrostProvider) GetScriptCborByScriptHash(
-	ctx context.Context,
-	scriptHash string,
-) (string, error) {
-	var bfScriptCbor bfScriptCbor
-	path := fmt.Sprintf("/scripts/%s/cbor", scriptHash)
-
-	err := b.doRequest(ctx, "GET", path, nil, &bfScriptCbor)
+) ([]common.Utxo, error) {
+	address, err := common.NewAddress(addr)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("%w: %s: %w", connector.ErrInvalidAddress, addr, err)
 	}
-
-	if bfScriptCbor.ScriptCbor == "" {
-		return "", fmt.Errorf(
-			"no script CBOR found for script hash: %s",
-			scriptHash,
-		)
-	}
-
-	return bfScriptCbor.ScriptCbor, nil
+	return b.fetchUtxosPaged(ctx, address, fmt.Sprintf("/addresses/%s/utxos", addr))
 }
 
 func (b *BlockfrostProvider) GetUtxosWithUnit(
 	ctx context.Context,
 	addr string,
 	unit string,
-) ([]UTxO.UTxO, error) {
-	var allBfUtxos []BlockfrostUTXO
+) ([]common.Utxo, error) {
+	address, err := common.NewAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", connector.ErrInvalidAddress, addr, err)
+	}
+	return b.fetchUtxosPaged(ctx, address, fmt.Sprintf("/addresses/%s/utxos/%s", addr, unit))
+}
+
+// fetchUtxosPaged fetches and hydrates all pages of a Blockfrost UTxO listing.
+func (b *BlockfrostProvider) fetchUtxosPaged(
+	ctx context.Context,
+	address common.Address,
+	basePath string,
+) ([]common.Utxo, error) {
+	var allUtxos []common.Utxo
 	page := 1
 
 	for {
-		var bfUtxos []BlockfrostUTXO
-		path := fmt.Sprintf("/addresses/%s/utxos/%s?page=%d", addr, unit, page)
-		err := b.doRequest(ctx, "GET", path, nil, &bfUtxos)
+		var rawUtxos []bfAddressUTxO
+		sep := "?"
+		if strings.Contains(basePath, "?") {
+			sep = "&"
+		}
+		path := fmt.Sprintf("%s%spage=%d", basePath, sep, page)
+		err := b.doRequest(ctx, "GET", path, nil, &rawUtxos)
 		if err != nil {
 			if page == 1 && errors.Is(err, connector.ErrNotFound) {
-				return []UTxO.UTxO{}, nil
+				return []common.Utxo{}, nil
 			}
 			return nil, err
 		}
 
-		if len(bfUtxos) == 0 {
+		if len(rawUtxos) == 0 {
 			break
 		}
 
-		allBfUtxos = append(allBfUtxos, bfUtxos...)
+		for _, raw := range rawUtxos {
+			utxo, err := b.hydrateUtxo(ctx, raw, address)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse UTxO %s#%d: %w", raw.TxHash, raw.OutputIndex, err)
+			}
+			allUtxos = append(allUtxos, utxo)
+		}
 
-		if len(bfUtxos) < 100 {
+		if len(rawUtxos) < 100 {
 			break
 		}
 		page++
 	}
 
-	return adaptBlockfrostAddressUTxOs(allBfUtxos, addr, ctx, b), nil
+	return allUtxos, nil
+}
+
+func (b *BlockfrostProvider) GetScriptCborByScriptHash(
+	ctx context.Context,
+	scriptHash string,
+) (string, error) {
+	var bfScript bfScriptCbor
+	path := fmt.Sprintf("/scripts/%s/cbor", scriptHash)
+
+	err := b.doRequest(ctx, "GET", path, nil, &bfScript)
+	if err != nil {
+		return "", err
+	}
+
+	if bfScript.ScriptCbor == "" {
+		return "", fmt.Errorf(
+			"no script CBOR found for script hash: %s",
+			scriptHash,
+		)
+	}
+
+	return bfScript.ScriptCbor, nil
 }
 
 // GetUtxoByUnit queries a UTxO by a specific unit.
-// Blockfrost doesn't have a direct endpoint for "get UTxO by unit".
-// We can query /assets/{asset}/addresses, then for each address, query its UTxOs for that asset.
-// This can be inefficient. If it's an NFT (supply 1), we can be more direct.
 func (b *BlockfrostProvider) GetUtxoByUnit(
 	ctx context.Context,
 	unit string,
-) (*UTxO.UTxO, error) {
-	// Get addresses holding this asset with count=2 to check if it's held by multiple addresses
+) (*common.Utxo, error) {
 	var addressesHoldingAsset []struct {
 		Address  string `json:"address"`
 		Quantity string `json:"quantity"`
 	}
 
 	assetAddressesPath := fmt.Sprintf("/assets/%s/addresses?count=2", unit)
-	err := b.doRequest(
-		ctx,
-		"GET",
-		assetAddressesPath,
-		nil,
-		&addressesHoldingAsset,
-	)
+	err := b.doRequest(ctx, "GET", assetAddressesPath, nil, &addressesHoldingAsset)
 	if err != nil {
 		if errors.Is(err, connector.ErrNotFound) {
 			return nil, fmt.Errorf("unit not found: %w", connector.ErrNotFound)
 		}
-		return nil, fmt.Errorf(
-			"failed to get addresses for asset %s: %w",
-			unit,
-			err,
-		)
+		return nil, fmt.Errorf("failed to get addresses for asset %s: %w", unit, err)
 	}
 
 	if len(addressesHoldingAsset) == 0 {
@@ -368,34 +351,22 @@ func (b *BlockfrostProvider) GetUtxoByUnit(
 	}
 
 	if len(addressesHoldingAsset) > 1 {
-		return nil, errors.New(
-			"unit needs to be an NFT or only held by one address",
-		)
+		return nil, connector.ErrMultipleUTXOs
 	}
 
 	address := addressesHoldingAsset[0].Address
 
 	utxos, err := b.GetUtxosWithUnit(ctx, address, unit)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to get UTxOs for address %s with unit %s: %w",
-			address,
-			unit,
-			err,
-		)
+		return nil, fmt.Errorf("failed to get UTxOs for address %s with unit %s: %w", address, unit, err)
 	}
 
 	if len(utxos) == 0 {
-		return nil, fmt.Errorf(
-			"unit not found in address UTxOs: %w",
-			connector.ErrNotFound,
-		)
+		return nil, fmt.Errorf("unit not found in address UTxOs: %w", connector.ErrNotFound)
 	}
 
 	if len(utxos) > 1 {
-		return nil, errors.New(
-			"unit needs to be an NFT or only held by one address",
-		)
+		return nil, connector.ErrMultipleUTXOs
 	}
 
 	return &utxos[0], nil
@@ -405,9 +376,9 @@ func (b *BlockfrostProvider) GetUtxoByUnit(
 func (b *BlockfrostProvider) GetUtxosByOutRef(
 	ctx context.Context,
 	outRefs []connector.OutRef,
-) ([]UTxO.UTxO, error) {
+) ([]common.Utxo, error) {
 	if len(outRefs) == 0 {
-		return []UTxO.UTxO{}, nil
+		return []common.Utxo{}, nil
 	}
 
 	uniqueTxHashes := make(map[string]bool)
@@ -416,67 +387,127 @@ func (b *BlockfrostProvider) GetUtxosByOutRef(
 	}
 
 	type txResult struct {
-		txHash string
-		utxos  Base.TxUtxos
-		err    error
+		txHash  string
+		outputs []bfAddressUTxO
+		err     error
 	}
 
 	resultChan := make(chan txResult, len(uniqueTxHashes))
 
 	for txHash := range uniqueTxHashes {
 		go func(hash string) {
-			var txUtxos Base.TxUtxos
+			var txUtxos struct {
+				Outputs []bfAddressUTxO `json:"outputs"`
+			}
 			path := fmt.Sprintf("/txs/%s/utxos", hash)
 			err := b.doRequest(ctx, "GET", path, nil, &txUtxos)
-			resultChan <- txResult{txHash: hash, utxos: txUtxos, err: err}
+			resultChan <- txResult{txHash: hash, outputs: txUtxos.Outputs, err: err}
 		}(txHash)
 	}
 
-	txUtxosMap := make(map[string]Base.TxUtxos)
+	txOutputsMap := make(map[string][]bfAddressUTxO)
 	for i := 0; i < len(uniqueTxHashes); i++ {
 		result := <-resultChan
 		if result.err != nil {
 			if !errors.Is(result.err, connector.ErrNotFound) {
-				return nil, fmt.Errorf(
-					"failed to get UTxOs for tx %s: %w",
-					result.txHash,
-					result.err,
-				)
+				return nil, fmt.Errorf("failed to get UTxOs for tx %s: %w", result.txHash, result.err)
 			}
 			continue
 		}
-		txUtxosMap[result.txHash] = result.utxos
+		txOutputsMap[result.txHash] = result.outputs
 	}
 
-	var results []UTxO.UTxO
+	var results []common.Utxo
 	for _, ref := range outRefs {
-		txUtxos, exists := txUtxosMap[ref.TxHash]
+		outputs, exists := txOutputsMap[ref.TxHash]
 		if !exists {
 			continue
 		}
-		for _, bfOut := range txUtxos.Outputs {
-			if bfOut.OutputIndex == int(ref.Index) {
-				apolloUtxo, err := adaptBlockfrostTxOutputToApolloUTxO(
-					ref.TxHash,
-					bfOut,
-					ctx,
-					b,
-				)
+		for _, raw := range outputs {
+			if raw.OutputIndex == int(ref.Index) {
+				// The /txs/{hash}/utxos outputs carry no tx_hash field, so set
+				// it from the requested ref before hydrating.
+				raw.TxHash = ref.TxHash
+				addr, err := common.NewAddress(raw.Address)
 				if err != nil {
-					return nil, fmt.Errorf(
-						"failed to adapt utxo for %s#%d: %w",
-						ref.TxHash,
-						ref.Index,
-						err,
-					)
+					return nil, fmt.Errorf("failed to decode address %s: %w", raw.Address, err)
 				}
-				results = append(results, apolloUtxo)
+				utxo, err := b.hydrateUtxo(ctx, raw, addr)
+				if err != nil {
+					return nil, fmt.Errorf("failed to adapt utxo for %s#%d: %w", ref.TxHash, ref.Index, err)
+				}
+				results = append(results, utxo)
 				break
 			}
 		}
 	}
 
 	return results, nil
+}
+
+// hydrateUtxo builds a common.Utxo from a BlockFrost UTxO and layers on the
+// inline datum and reference script (resolved by hash) when present.
+func (b *BlockfrostProvider) hydrateUtxo(
+	ctx context.Context,
+	raw bfAddressUTxO,
+	address common.Address,
+) (common.Utxo, error) {
+	utxo, err := raw.toUtxo(address)
+	if err != nil {
+		return common.Utxo{}, err
+	}
+	output, ok := utxo.Output.(*babbage.BabbageTransactionOutput)
+	if !ok {
+		return common.Utxo{}, fmt.Errorf("unexpected UTxO output type: %T", utxo.Output)
+	}
+	if len(raw.InlineDatum) > 0 && string(raw.InlineDatum) != "null" {
+		datumOpt, err := inlineDatumOptionFromBlockfrost(raw.InlineDatum)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf("failed to decode inline datum: %w", err)
+		}
+		output.DatumOption = datumOpt
+	}
+	if raw.ReferenceScriptHash != "" {
+		scriptRef, err := b.scriptRefByHash(ctx, raw.ReferenceScriptHash)
+		if err != nil {
+			// Chain-read hydration is best-effort: a reference script that
+			// cannot be resolved (empty CBOR, native scripts served only at
+			// /scripts/{hash}/json, parse error, transient failure) must NOT
+			// abort the whole UTxO fetch. Keep the UTxO with an unresolved
+			// (nil) reference script.
+			slog.Warn("blockfrost: leaving reference script unresolved during hydration",
+				"script_hash", raw.ReferenceScriptHash,
+				"utxo", fmt.Sprintf("%s#%d", raw.TxHash, raw.OutputIndex),
+				"err", err)
+		} else {
+			output.TxOutScriptRef = scriptRef
+		}
+	}
+	return utxo, nil
+}
+
+// scriptRefByHash resolves a reference script's CBOR by hash and builds a typed
+// gouroboros ScriptRef from it.
+func (b *BlockfrostProvider) scriptRefByHash(ctx context.Context, hashHex string) (*common.ScriptRef, error) {
+	hashBytes, err := hex.DecodeString(hashHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid script hash hex %q: %w", hashHex, err)
+	}
+	if len(hashBytes) != common.Blake2b224Size {
+		return nil, fmt.Errorf("invalid script hash length: expected %d bytes, got %d", common.Blake2b224Size, len(hashBytes))
+	}
+	var scriptHash common.Blake2b224
+	copy(scriptHash[:], hashBytes)
+
+	scriptCborHex, err := b.GetScriptCborByScriptHash(ctx, hashHex)
+	if err != nil {
+		return nil, err
+	}
+	scriptCbor, err := hex.DecodeString(scriptCborHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid script CBOR hex: %w", err)
+	}
+	return scriptRefFromHash(scriptHash, scriptCbor)
 }
 
 // GetDelegation fetches delegation information for a reward address.
@@ -491,14 +522,11 @@ func (b *BlockfrostProvider) GetDelegation(
 		)
 	}
 
-	var bfAccountDetails BlockfrostAccountDetails // Use the specific struct
+	var bfAccountDetails BlockfrostAccountDetails
 	path := "/accounts/" + stakeAddrStr
 
 	err := b.doRequest(ctx, "GET", path, nil, &bfAccountDetails)
 	if err != nil {
-		// If the account is not found, Blockfrost returns 404.
-		// This means the account has never participated or has no history.
-		// In this case, it's not delegated and has 0 rewards.
 		if errors.Is(err, connector.ErrNotFound) {
 			return connector.Delegation{
 				PoolId:  "",
@@ -506,53 +534,40 @@ func (b *BlockfrostProvider) GetDelegation(
 				Active:  false,
 			}, nil
 		}
-		return connector.Delegation{}, fmt.Errorf(
-			"failed to get account details for %s: %w",
-			stakeAddrStr,
-			err,
-		)
+		return connector.Delegation{}, fmt.Errorf("failed to get account details for %s: %w", stakeAddrStr, err)
 	}
 
 	return adaptBlockfrostAccountToDelegation(bfAccountDetails), nil
 }
 
-// GetDatum fetches a datum by its hash.
+// GetDatum fetches a datum by its hash and returns the decoded gouroboros datum.
 func (b *BlockfrostProvider) GetDatum(
 	ctx context.Context,
 	datumHash string,
-) (PlutusData.PlutusData, error) {
-	var bfDatum struct { // Blockfrost returns { "json_value": null, "cbor": "..." }
+) (common.Datum, error) {
+	var bfDatum struct {
 		Cbor  string `json:"cbor"`
 		Error string `json:"error"`
 	}
 	path := fmt.Sprintf("/scripts/datum/%s/cbor", datumHash)
 	err := b.doRequest(ctx, "GET", path, nil, &bfDatum)
 	if err != nil {
-		return PlutusData.PlutusData{}, err
+		return common.Datum{}, err
 	}
 
 	if bfDatum.Error != "" || bfDatum.Cbor == "" {
-		return PlutusData.PlutusData{}, fmt.Errorf(
-			"no datum found for datum hash: %s",
-			datumHash,
-		)
+		return common.Datum{}, fmt.Errorf("no datum found for datum hash: %s", datumHash)
 	}
 
 	datumBytes, err := hex.DecodeString(bfDatum.Cbor)
 	if err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
-			"invalid datum cbor hex from blockfrost: %w",
-			err,
-		)
+		return common.Datum{}, fmt.Errorf("invalid datum cbor hex from blockfrost: %w", err)
 	}
-	var pd PlutusData.PlutusData
-	if err := cbor.Unmarshal(datumBytes, &pd); err != nil {
-		return PlutusData.PlutusData{}, fmt.Errorf(
-			"failed to unmarshal datum cbor: %w",
-			err,
-		)
+	var datum common.Datum
+	if err := datum.UnmarshalCBOR(datumBytes); err != nil {
+		return common.Datum{}, fmt.Errorf("failed to unmarshal datum cbor: %w", err)
 	}
-	return pd, nil
+	return datum, nil
 }
 
 // AwaitTx waits for a transaction to be confirmed.
@@ -572,26 +587,23 @@ func (b *BlockfrostProvider) AwaitTx(
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-ticker.C:
-			var txInfo struct { // Blockfrost's /txs/{hash} response
+			var txInfo struct {
 				Block string `json:"block"`
 				Error string `json:"error"`
 			}
 			path := "/txs/" + txHash
 			err := b.doRequest(ctx, "GET", path, nil, &txInfo)
 			if err != nil {
-				// Check if it's a 404 (transaction not found yet) using the wrapped error
 				if errors.Is(err, connector.ErrNotFound) {
-					continue // Not found yet, keep waiting
+					continue
 				}
-				return false, err // Other error
+				return false, err
 			}
 
-			// Check if the response has an error field (transaction exists but has error)
 			if txInfo.Error != "" {
-				continue // Transaction found but has error, keep waiting
+				continue
 			}
 
-			// Check if transaction is confirmed (has block hash)
 			if txInfo.Block != "" {
 				select {
 				case <-ctx.Done():
@@ -609,9 +621,8 @@ func (b *BlockfrostProvider) SubmitTx(
 	ctx context.Context,
 	txBytes []byte,
 ) (string, error) {
-	var submittedTxHashStr string // Blockfrost returns the tx hash as plain text (quoted string)
+	var submittedTxHashStr string
 
-	// custom submission endpoints first
 	if len(b.customSubmissionEndpoints) > 0 {
 		for _, endpoint := range b.customSubmissionEndpoints {
 			err := b.doCustomSubmit(ctx, endpoint, txBytes, &submittedTxHashStr)
@@ -621,20 +632,12 @@ func (b *BlockfrostProvider) SubmitTx(
 		}
 	}
 
-	err := b.doRequest(
-		ctx,
-		"POST",
-		"/tx/submit",
-		bytes.NewReader(txBytes),
-		&submittedTxHashStr,
-	)
+	err := b.doRequest(ctx, "POST", "/tx/submit", bytes.NewReader(txBytes), &submittedTxHashStr)
 	if err != nil {
-		return "", fmt.Errorf("blockfrost tx submission failed: %w", err)
+		return "", fmt.Errorf("%w: %w", connector.ErrTxSubmissionFailed, err)
 	}
 	if submittedTxHashStr == "" {
-		return "", errors.New(
-			"blockfrost did not return a transaction hash on submission",
-		)
+		return "", errors.New("blockfrost did not return a transaction hash on submission")
 	}
 	return submittedTxHashStr, nil
 }
@@ -645,20 +648,11 @@ func (b *BlockfrostProvider) doCustomSubmit(
 	txBytes []byte,
 	target *string,
 ) error {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		endpoint,
-		bytes.NewReader(txBytes),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(txBytes))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/cbor")
-	// Custom endpoints might or might not need project_id
-	// if b.projectID != "" && strings.Contains(endpoint, "blockfrost.io") {
-	//    req.Header.Set("project_id", b.projectID)
-	// }
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
@@ -668,12 +662,7 @@ func (b *BlockfrostProvider) doCustomSubmit(
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf(
-			"custom submit to %s failed: status %d, body: %s",
-			endpoint,
-			resp.StatusCode,
-			string(bodyBytes),
-		)
+		return fmt.Errorf("custom submit to %s failed: status %d, body: %s", endpoint, resp.StatusCode, string(bodyBytes))
 	}
 	if target != nil {
 		*target = strings.Trim(string(bodyBytes), "\"")
@@ -681,203 +670,64 @@ func (b *BlockfrostProvider) doCustomSubmit(
 	return nil
 }
 
-// Cardano script_ref inner CBOR is [ script_type, script_bytes ] where
-// script_type: 0 = native, 1 = PlutusV1, 2 = PlutusV2, 3 = PlutusV3.
-const (
-	scriptTypeNative   = 0
-	scriptTypePlutusV1 = 1
-	scriptTypePlutusV2 = 2
-	scriptTypePlutusV3 = 3
-)
-
-// decodeScriptRef decodes apollo's PlutusData.ScriptRef into the script
-// language type and the RAW (un-tagged) serialised Plutus script bytes.
-//
-// apollo stores ScriptRef as the inner CBOR content of the script_ref wire
-// format (the bytes wrapped by CBOR tag 24, i.e. #6.24(bytes)); the tag-24
-// wrapper is only applied/stripped in ScriptRef.MarshalCBOR/UnmarshalCBOR.
-// That inner content is itself CBOR `[ script_type, script_bytes ]`, so we
-// decode it directly here.
-func decodeScriptRef(
-	scriptRef *PlutusData.ScriptRef,
-) (scriptType int, rawScript []byte, err error) {
-	if scriptRef == nil {
-		return 0, nil, errors.New("nil script ref")
-	}
-
-	// Decode the script type first and keep the script payload raw: only
-	// Plutus scripts carry a CBOR bytestring payload, whereas native scripts
-	// (type 0) carry a script array. Decoding the payload as a bytestring
-	// unconditionally would make a real native ref fail with a low-level CBOR
-	// type error instead of the caller's clear "unsupported" error.
-	var decoded struct {
-		_          struct{} `cbor:",toarray"`
-		ScriptType int
-		Script     cbor.RawMessage
-	}
-	if err := cbor.Unmarshal([]byte(*scriptRef), &decoded); err != nil {
-		return 0, nil, fmt.Errorf(
-			"failed to decode script ref CBOR: %w",
-			err,
-		)
-	}
-
-	switch decoded.ScriptType {
-	case scriptTypePlutusV1, scriptTypePlutusV2, scriptTypePlutusV3:
-		if err := cbor.Unmarshal(decoded.Script, &rawScript); err != nil {
-			return 0, nil, fmt.Errorf(
-				"failed to decode plutus script bytes: %w",
-				err,
-			)
-		}
-		return decoded.ScriptType, rawScript, nil
-	default:
-		// Native (type 0) or unknown: return the type with no bytes so the
-		// caller can emit a clear unsupported-script error.
-		return decoded.ScriptType, nil, nil
-	}
-}
-
-// buildAdditionalUtxoItem builds a single [txIn, txOut] additional-UTxO pair
-// for the Blockfrost (Ogmios v5) tx-evaluation endpoint.
-func buildAdditionalUtxoItem(
-	utxo UTxO.UTxO,
-) (bfAdditionalUtxoItem, error) {
-	txIn := bfTxIn{
-		TxId:  hex.EncodeToString(utxo.Input.TransactionId),
-		Index: utxo.Input.Index,
-	}
-
-	currentUtxoAmount := utxo.Output.GetAmount()
-	bfVal := bfValue{
-		Coins: currentUtxoAmount.GetCoin(),
-	}
-
-	if currentUtxoAmount.HasAssets {
-		assets := make(map[string]int64)
-		for policyId, assetMap := range currentUtxoAmount.Am.Value {
-			for assetName, quantity := range assetMap {
-				assetNameHex := assetName.HexString()
-				var unit string
-				if assetNameHex == "" {
-					unit = policyId.Value
-				} else {
-					unit = policyId.Value + "." + assetNameHex
-				}
-				assets[unit] = quantity
-			}
-		}
-		if len(assets) > 0 {
-			bfVal.Assets = assets
-		}
-	}
-
-	txOut := bfTxOut{
-		Address: utxo.Output.GetAddress().String(),
-		Value:   bfVal,
-	}
-
-	// Datum: pre-Alonzo outputs carry only a datum hash; post-Alonzo (Babbage)
-	// outputs carry either an inline datum or a datum hash. datum and datumHash
-	// are mutually exclusive.
-	if utxo.Output.IsPostAlonzo {
-		if d := utxo.Output.PostAlonzo.Datum; d != nil {
-			switch d.DatumType {
-			case PlutusData.DatumTypeInline:
-				if inlineDatum := utxo.Output.GetDatum(); inlineDatum != nil {
-					datumCbor, err := cbor.Marshal(inlineDatum)
-					if err != nil {
-						return bfAdditionalUtxoItem{}, fmt.Errorf(
-							"failed to encode inline datum in additional UTxO set: %w",
-							err,
-						)
-					}
-					datumHex := hex.EncodeToString(datumCbor)
-					txOut.Datum = &datumHex
-				}
-			case PlutusData.DatumTypeHash:
-				if len(d.Hash) > 0 {
-					datumHashHex := hex.EncodeToString(d.Hash)
-					txOut.DatumHash = &datumHashHex
-				}
-			}
-		}
-	} else if datumHash := utxo.Output.GetDatumHash(); datumHash != nil &&
-		len(datumHash.Payload) > 0 {
-		datumHashHex := hex.EncodeToString(datumHash.Payload)
-		txOut.DatumHash = &datumHashHex
-	}
-
-	if scriptRef := utxo.Output.GetScriptRef(); scriptRef != nil {
-		scriptType, rawScript, err := decodeScriptRef(scriptRef)
-		if err != nil {
-			return bfAdditionalUtxoItem{}, fmt.Errorf(
-				"failed to decode script ref in additional UTxO set: %w",
-				err,
-			)
-		}
-
-		rawScriptHex := hex.EncodeToString(rawScript)
-		switch scriptType {
-		case scriptTypePlutusV1:
-			txOut.ScriptRef = &bfScriptRef{PlutusV1: &rawScriptHex}
-		case scriptTypePlutusV2:
-			txOut.ScriptRef = &bfScriptRef{PlutusV2: &rawScriptHex}
-		case scriptTypePlutusV3:
-			txOut.ScriptRef = &bfScriptRef{PlutusV3: &rawScriptHex}
-		case scriptTypeNative:
-			return bfAdditionalUtxoItem{}, errors.New(
-				"unsupported script type in additional UTxO set: native scripts are not supported by the Ogmios v5 evaluation endpoint",
-			)
-		default:
-			return bfAdditionalUtxoItem{}, fmt.Errorf(
-				"unsupported script type in additional UTxO set: unknown script type %d",
-				scriptType,
-			)
-		}
-	}
-
-	return bfAdditionalUtxoItem{txIn, txOut}, nil
-}
-
-// EvaluateTx evaluates a transaction's scripts.
+// EvaluateTx evaluates a transaction's scripts and returns the per-redeemer
+// execution units. additionalUTxOs are forwarded to the evaluator (e.g. inputs
+// not yet confirmed on-chain) via the /utils/txs/evaluate/utxos endpoint.
 func (b *BlockfrostProvider) EvaluateTx(
 	ctx context.Context,
 	txBytes []byte,
-	additionalUTxOs []UTxO.UTxO,
-) (map[string]Redeemer.ExecutionUnits, error) {
-	additionalBfUtxos := make([]bfAdditionalUtxoItem, 0, len(additionalUTxOs))
-	for _, utxo := range additionalUTxOs {
-		item, err := buildAdditionalUtxoItem(utxo)
+	additionalUTxOs []common.Utxo,
+) (map[common.RedeemerKey]common.ExUnits, error) {
+	if len(additionalUTxOs) > 0 {
+		items := make([]bfAdditionalUtxoItem, 0, len(additionalUTxOs))
+		for _, utxo := range additionalUTxOs {
+			item, err := bfAdditionalUtxoItemFromUtxo(utxo)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		evalReq := bfEvalRequest{
+			Cbor:              hex.EncodeToString(txBytes),
+			AdditionalUtxoSet: items,
+		}
+		reqBodyBytes, err := json.Marshal(evalReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal blockfrost eval request: %w", err)
+		}
+		data, err := b.doEvaluate(ctx, "/utils/txs/evaluate/utxos", reqBodyBytes, "application/json")
 		if err != nil {
 			return nil, err
 		}
-		additionalBfUtxos = append(additionalBfUtxos, item)
+		return parseEvaluateTxResponse(data)
 	}
 
-	evalReq := bfEvalRequest{
-		Cbor:              hex.EncodeToString(txBytes),
-		AdditionalUtxoSet: additionalBfUtxos,
-	}
-
-	reqBodyBytes, err := json.MarshalIndent(evalReq, "", "  ")
+	// Bare evaluation: BlockFrost expects the transaction CBOR hex-encoded in the
+	// request body with Content-Type application/cbor.
+	body := []byte(hex.EncodeToString(txBytes))
+	data, err := b.doEvaluate(ctx, "/utils/txs/evaluate", body, "application/cbor")
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to marshal blockfrost eval request: %w",
-			err,
-		)
+		return nil, err
 	}
+	return parseEvaluateTxResponse(data)
+}
 
-	req, _ := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		b.baseURL+"/utils/txs/evaluate/utxos",
-		bytes.NewReader(reqBodyBytes),
-	)
+// doEvaluate performs a POST to a BlockFrost evaluation endpoint and returns the
+// raw response body, surfacing non-200 responses as errors.
+func (b *BlockfrostProvider) doEvaluate(
+	ctx context.Context,
+	path string,
+	body []byte,
+	contentType string,
+) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
 	if b.projectID != "" {
 		req.Header.Set("project_id", b.projectID)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
@@ -892,36 +742,10 @@ func (b *BlockfrostProvider) EvaluateTx(
 			Message    string `json:"message"`
 			Fault      bool   `json:"fault"`
 		}
-		if json.Unmarshal(respBytes, &errorResp) == nil {
-			if errorResp.StatusCode == http.StatusBadRequest {
-				return nil, fmt.Errorf("%s", errorResp.Message)
-			}
+		if json.Unmarshal(respBytes, &errorResp) == nil && errorResp.Message != "" {
+			return nil, fmt.Errorf("%w: %s", connector.ErrEvaluationFailed, errorResp.Message)
 		}
-		return nil, fmt.Errorf(
-			"could not evaluate the transaction: %s. Transaction: %s",
-			string(respBytes),
-			hex.EncodeToString(txBytes),
-		)
+		return nil, fmt.Errorf("%w: could not evaluate the transaction: %s", connector.ErrEvaluationFailed, evalErrorSnippet(respBytes))
 	}
-
-	var outerResult struct {
-		Result bfEvalResult `json:"result"`
-	}
-
-	if err := json.Unmarshal(respBytes, &outerResult); err != nil {
-		return nil, fmt.Errorf(
-			"failed to unmarshal blockfrost eval response: %w. Body: %s",
-			err,
-			string(respBytes),
-		)
-	}
-
-	if outerResult.Result.Result == nil {
-		return nil, fmt.Errorf(
-			"EvaluateTransaction fails: %s",
-			string(respBytes),
-		)
-	}
-
-	return adaptBlockfrostEvalResult(outerResult.Result), nil
+	return respBytes, nil
 }
