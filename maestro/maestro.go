@@ -3,16 +3,19 @@ package maestro
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Salvionied/apollo/v2/backend"
+	"github.com/blinklabs-io/gouroboros/cbor"
 	"github.com/blinklabs-io/gouroboros/ledger/common"
 	maestroClient "github.com/maestro-org/go-sdk/client"
 	"github.com/maestro-org/go-sdk/utils"
-
-	"github.com/Salvionied/apollo/v2/backend"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
@@ -47,6 +50,7 @@ func New(config Config) (*MaestroProvider, error) {
 
 	provider := &MaestroProvider{
 		client:                 client,
+		projectID:              config.ProjectID,
 		genesisParams:          genesisParams,
 		protocolParamsOverride: config.ProtocolParamsOverride,
 		protocolParamsPreset:   protocolParamsPreset,
@@ -94,7 +98,69 @@ func (m *MaestroProvider) GetProtocolParameters(
 			err,
 		)
 	}
+
+	// The SDK's StringExUnits maps the step price to the JSON key "steps", but
+	// the live Maestro API returns it under "cpu", so resp.Data.ScriptExecutionPrices.Steps
+	// is empty. Recover the real prices from the raw response.
+	if priceMem, priceStep, ok := m.fetchScriptExecutionPrices(); ok {
+		protocolParams.PriceMem = priceMem
+		protocolParams.PriceStep = priceStep
+	}
+
 	return mergeMaestroProtocolParams(protocolParams, m.protocolParamsPreset), nil
+}
+
+// fetchScriptExecutionPrices fetches the protocol parameters as raw JSON and
+// parses script_execution_prices, reading the step price from the "cpu" key
+// (which the SDK model does not map). Returns ok=false on any error so the
+// caller can fall back to the preset prices.
+func (m *MaestroProvider) fetchScriptExecutionPrices() (priceMem, priceStep float64, ok bool) {
+	httpClient := m.client.HTTPClient
+	if httpClient == nil {
+		return 0, 0, false
+	}
+	url := m.client.BaseUrl + "/protocol-parameters"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0, false
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("api-key", m.projectID)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, false
+	}
+
+	var parsed struct {
+		Data struct {
+			ScriptExecutionPrices struct {
+				Memory string `json:"memory"`
+				Cpu    string `json:"cpu"`
+			} `json:"script_execution_prices"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, 0, false
+	}
+
+	mem, err := backend.ParseFraction(parsed.Data.ScriptExecutionPrices.Memory)
+	if err != nil {
+		return 0, 0, false
+	}
+	step, err := backend.ParseFraction(parsed.Data.ScriptExecutionPrices.Cpu)
+	if err != nil {
+		return 0, 0, false
+	}
+	return mem, step, true
 }
 
 // GetGenesisParams returns the genesis parameters for the configured network.
@@ -225,7 +291,60 @@ func (m *MaestroProvider) GetScriptCborByScriptHash(
 			connector.ErrNotFound,
 		)
 	}
-	return resp.Data.Bytes, nil
+
+	// Maestro returns the script double-CBOR-wrapped: the script CBOR is itself
+	// wrapped in an outer CBOR byte string (e.g. "590608" wrapping the inner
+	// "590605..." script). Other backends (and the reference-script resolution
+	// path) use the inner, single-wrapped form, so unwrap one byte-string layer
+	// to keep GetScriptCborByScriptHash consistent across providers.
+	return unwrapMaestroScriptCbor(resp.Data.Bytes)
+}
+
+// unwrapMaestroScriptCbor normalizes Maestro's script CBOR to the canonical
+// single-wrapped Plutus script form (a CBOR byte string wrapping the flat UPLC
+// program, e.g. "5906 05 <uplc>") used by Blockfrost, Kupo, and the
+// reference-script resolution path.
+//
+// Maestro returns the script DOUBLE-CBOR-wrapped: an outer byte string wrapping
+// the canonical script byte string (e.g. "590608" wrapping "590605..."). We
+// must strip exactly one layer in that case, but NOT when Maestro already
+// returns the canonical single-wrapped form, because that form is itself a CBOR
+// byte string and a naive single-strip would over-strip it down to raw UPLC.
+//
+// The distinguisher: after decoding one byte-string layer, the canonical form's
+// inner content is ALSO a CBOR byte string (the flat program wrapped once),
+// whereas the single-wrapped form's inner content is raw UPLC (not a CBOR byte
+// string). So we unwrap only when the inner content is itself a valid CBOR byte
+// string; otherwise we return the original bytes unchanged.
+func unwrapMaestroScriptCbor(scriptHex string) (string, error) {
+	raw, err := hex.DecodeString(scriptHex)
+	if err != nil {
+		return "", fmt.Errorf("maestro: invalid script CBOR hex: %w", err)
+	}
+	var inner []byte
+	if _, decErr := cbor.Decode(raw, &inner); decErr == nil && len(inner) > 0 {
+		// Only treat this as a double-wrap (and strip a layer) if the inner
+		// content is itself a CBOR byte string: first byte is a CBOR byte-string
+		// major type (0x40-0x5f) and it decodes cleanly as []byte.
+		if isCborByteString(inner) {
+			return hex.EncodeToString(inner), nil
+		}
+	}
+	return scriptHex, nil
+}
+
+// isCborByteString reports whether b begins with a CBOR byte-string major type
+// (major type 2, initial byte 0x40-0x5f) and decodes cleanly as a byte string.
+func isCborByteString(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	if b[0] < 0x40 || b[0] > 0x5f {
+		return false
+	}
+	var decoded []byte
+	_, err := cbor.Decode(b, &decoded)
+	return err == nil
 }
 
 // GetUtxoByUnit finds the single UTxO containing a specific unit (NFT).

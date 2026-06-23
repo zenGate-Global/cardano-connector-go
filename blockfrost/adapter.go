@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -369,37 +368,75 @@ func (p *bfProtocolParams) toProtocolParams() (backend.ProtocolParameters, error
 		MinFeeReferenceScriptsMultiplier: p.MinFeeReferenceScriptsMultiplier,
 	}
 
-	// Cost models may arrive as either the array format
-	// ({"PlutusV1": [205665, ...]}) or the keyed format
-	// ({"PlutusV1": {"addInteger-cpu-...": 205665, ...}}). The ledger
-	// serializes cost models as a flat list ordered by alphabetically-sorted
-	// parameter names, so the keyed form is flattened in sorted-key order.
-	if len(p.CostModels) > 0 {
-		var arrayModels map[string][]int64
-		if err := json.Unmarshal(p.CostModels, &arrayModels); err == nil {
-			pp.CostModels = arrayModels
-		} else {
-			var keyedModels map[string]map[string]int64
-			if err := json.Unmarshal(p.CostModels, &keyedModels); err != nil {
-				return pp, fmt.Errorf("failed to parse cost models: %w", err)
-			}
-			pp.CostModels = make(map[string][]int64, len(keyedModels))
-			for lang, costs := range keyedModels {
-				sortedKeys := make([]string, 0, len(costs))
-				for k := range costs {
-					sortedKeys = append(sortedKeys, k)
-				}
-				sort.Strings(sortedKeys)
-				values := make([]int64, 0, len(costs))
-				for _, k := range sortedKeys {
-					values = append(values, costs[k])
-				}
-				pp.CostModels[lang] = values
-			}
+	// Cost models. The canonical ledger cost-model vector is a positional list
+	// (the order is ledger-defined, NOT alphabetical), which is exactly what
+	// BlockFrost's "cost_models_raw" field provides ({"PlutusV1": [n, ...]}).
+	// Always prefer it. The named "cost_models" field ({"PlutusV1":
+	// {"addInteger-...": n}}) is a map whose iteration/sort order does NOT match
+	// the ledger order, so flattening it (e.g. by sorting parameter names) would
+	// scramble the coefficients and produce wildly wrong execution budgets in
+	// local script evaluation. It is used only as a best-effort fallback when it
+	// is already an array, and never by sorting keys.
+	costModels, err := parseCostModels(p.CostModelsRaw, p.CostModels)
+	if err != nil {
+		return pp, err
+	}
+	pp.CostModels = costModels
+
+	return pp, nil
+}
+
+// parseCostModels resolves protocol cost models, preferring the canonical-order
+// array form (BlockFrost "cost_models_raw"). A named/keyed form is rejected
+// rather than guessed at, because its key order is not the ledger's canonical
+// order. Scrambled or missing cost models corrupt the script-data hash, so this
+// fails loud rather than silently returning no models.
+func parseCostModels(raw, named json.RawMessage) (map[string][]int64, error) {
+	rawPresent := len(raw) > 0 && jsonValuePresent(raw)
+	namedPresent := len(named) > 0 && jsonValuePresent(named)
+
+	// First try the named field when it happens to already be array-encoded
+	// (some proxies return cost_models directly as arrays). This is the only
+	// safe use of the named field.
+	var namedArray map[string][]int64
+	namedArrayOk := false
+	if namedPresent {
+		if err := json.Unmarshal(named, &namedArray); err == nil && len(namedArray) > 0 {
+			namedArrayOk = true
 		}
 	}
 
-	return pp, nil
+	if rawPresent {
+		var arrayModels map[string][]int64
+		if err := json.Unmarshal(raw, &arrayModels); err == nil && len(arrayModels) > 0 {
+			return arrayModels, nil
+		}
+		// cost_models_raw was present but could not be parsed into a non-empty
+		// array map. Proceeding with no/wrong cost models would corrupt the
+		// script-data hash, so fail loud unless a valid array-form cost_models
+		// fallback is available.
+		if namedArrayOk {
+			return namedArray, nil
+		}
+		return nil, errors.New(
+			"blockfrost cost_models_raw is present but malformed (expected a map of canonical-order int64 arrays); " +
+				"refusing to proceed without valid cost models",
+		)
+	}
+
+	if namedArrayOk {
+		return namedArray, nil
+	}
+	if namedPresent {
+		// The named form is a name->value map; its order is not canonical, so
+		// it cannot be safely flattened. Without cost_models_raw there is no
+		// reliable cost-model vector.
+		return nil, errors.New(
+			"blockfrost cost models are only available in named (non-canonical-order) form; " +
+				"cost_models_raw is required for correct script evaluation",
+		)
+	}
+	return nil, nil
 }
 
 // parseRedeemerPurpose maps an Ogmios redeemer purpose string to a gouroboros

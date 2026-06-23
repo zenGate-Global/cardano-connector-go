@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Salvionied/apollo/v2/backend"
 	"github.com/blinklabs-io/gouroboros/cbor"
 	"github.com/blinklabs-io/gouroboros/ledger"
 	"github.com/blinklabs-io/gouroboros/ledger/babbage"
@@ -16,8 +17,6 @@ import (
 	"github.com/blinklabs-io/gouroboros/ledger/mary"
 	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 	"github.com/maestro-org/go-sdk/models"
-
-	"github.com/Salvionied/apollo/v2/backend"
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 
@@ -26,11 +25,17 @@ import (
 func adaptMaestroProtocolParams(
 	data models.ProtocolParams,
 ) (backend.ProtocolParameters, error) {
-	priceMem, err := backend.ParseFraction(data.ScriptExecutionPrices.Memory)
+	// Script execution prices. NOTE: the live Maestro API returns the step
+	// price under the JSON key "cpu", but the SDK's StringExUnits maps "steps",
+	// so data.ScriptExecutionPrices.Steps is empty. GetProtocolParameters
+	// recovers the correct prices from the raw response and overrides these.
+	// Parse tolerantly here (empty -> 0) so a missing/renamed field does not
+	// fail the whole conversion.
+	priceMem, err := parseFractionOrZero(data.ScriptExecutionPrices.Memory)
 	if err != nil {
 		return backend.ProtocolParameters{}, fmt.Errorf("invalid memory price: %w", err)
 	}
-	priceStep, err := backend.ParseFraction(data.ScriptExecutionPrices.Steps)
+	priceStep, err := parseFractionOrZero(data.ScriptExecutionPrices.Steps)
 	if err != nil {
 		return backend.ProtocolParameters{}, fmt.Errorf("invalid step price: %w", err)
 	}
@@ -328,6 +333,17 @@ func maestroScriptRef(scriptType string, scriptCbor []byte, expectedHashHex stri
 		return nil, fmt.Errorf("unknown script type %q", scriptType)
 	}
 	return backend.ScriptRefFromBytes(refType, scriptCbor, expectedHashHex)
+}
+
+// parseFractionOrZero parses a fraction string, returning 0 for an empty
+// string. Maestro can omit/rename fraction fields (e.g. the step price arrives
+// under "cpu", which the SDK does not map), so an empty value must not fail the
+// whole protocol-parameter conversion; the caller recovers/fills it separately.
+func parseFractionOrZero(s string) (float64, error) {
+	if strings.TrimSpace(s) == "" {
+		return 0, nil
+	}
+	return backend.ParseFraction(s)
 }
 
 // parseRedeemerPurpose maps a redeemer purpose string to a gouroboros

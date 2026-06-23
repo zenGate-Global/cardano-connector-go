@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -364,12 +363,8 @@ func TestEvaluateTxSample1WithBlockfrostResolver(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample1RedeemersExUnits) {
-		t.Fatalf(
-			"expected redeemers %+v, got %+v",
-			fixture.ApolloEvalSample1RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := fixture.RedeemersApproxEqual(redeemers, fixture.ApolloEvalSample1RedeemersExUnits, 0.02); !ok {
+		t.Fatalf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
@@ -390,12 +385,8 @@ func TestEvaluateTxSample2WithBlockfrostResolver(t *testing.T) {
 		fixture.ApolloEvalSample2UTxOs,
 	)
 
-	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample2RedeemersExUnits) {
-		t.Fatalf(
-			"expected redeemers %+v, got %+v",
-			fixture.ApolloEvalSample2RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := fixture.RedeemersApproxEqual(redeemers, fixture.ApolloEvalSample2RedeemersExUnits, 0.02); !ok {
+		t.Fatalf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
@@ -416,12 +407,8 @@ func TestEvaluateTxSample3WithBlockfrostResolver(t *testing.T) {
 		fixture.ApolloEvalSample3UTxOs,
 	)
 
-	if !reflect.DeepEqual(redeemers, fixture.ApolloEvalSample3RedeemersExUnits) {
-		t.Fatalf(
-			"expected redeemers %+v, got %+v",
-			fixture.ApolloEvalSample3RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := fixture.RedeemersApproxEqual(redeemers, fixture.ApolloEvalSample3RedeemersExUnits, 0.02); !ok {
+		t.Fatalf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 

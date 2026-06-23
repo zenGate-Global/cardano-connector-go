@@ -17,7 +17,6 @@ import (
 	"github.com/SundaeSwap-finance/ogmigo/v6/ouroboros/shared"
 	"github.com/blinklabs-io/gouroboros/ledger/common"
 	"github.com/gorilla/websocket"
-
 	connector "github.com/zenGate-Global/cardano-connector-go"
 )
 

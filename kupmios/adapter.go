@@ -24,10 +24,14 @@ import (
 	"github.com/blinklabs-io/gouroboros/ledger/shelley"
 )
 
-// datumFetcher resolves a datum's CBOR (hex-encoded) by its hash. It is
-// implemented by *kugo.Client via the Kupo /v1/datums/{hash} endpoint.
-type datumFetcher interface {
+// chainFetcher resolves datums and reference scripts by hash. It is implemented
+// by *kugo.Client via the Kupo /v1/datums/{hash} and /v1/scripts/{hash}
+// endpoints. Kupo's /matches response carries only the datum hash and script
+// hash (not the resolved datum/script bytes), so both must be fetched
+// separately.
+type chainFetcher interface {
 	Datum(ctx context.Context, datumHash string) (string, error)
+	Script(ctx context.Context, scriptHash string) (*kugo.Script, error)
 }
 
 // matchToUtxo converts a kugo.Match into a gouroboros common.Utxo. Inline
@@ -36,7 +40,7 @@ func matchToUtxo(
 	ctx context.Context,
 	match kugo.Match,
 	address common.Address,
-	datums datumFetcher,
+	fetcher chainFetcher,
 ) (common.Utxo, error) {
 	hashBytes, err := hex.DecodeString(match.TransactionID)
 	if err != nil {
@@ -86,7 +90,7 @@ func matchToUtxo(
 	if match.DatumHash != "" {
 		switch match.DatumType {
 		case "inline":
-			opt, err := fetchInlineDatumOption(ctx, datums, match.DatumHash)
+			opt, err := fetchInlineDatumOption(ctx, fetcher, match.DatumHash)
 			if err != nil {
 				return common.Utxo{}, err
 			}
@@ -109,10 +113,26 @@ func matchToUtxo(
 		}
 	}
 
-	// Set script reference from kupo match data, verifying the script bytes
-	// against the script hash claimed by kupo.
-	if match.Script.Script != "" {
-		ref, err := kupoScriptToScriptRef(match.Script, match.ScriptHash)
+	// Set the reference script. Kupo's /matches response carries only the
+	// script hash, not the resolved script bytes, so when a script hash is
+	// present we resolve the script via /v1/scripts/{hash}. The resolved bytes
+	// are verified against the claimed hash by kupoScriptToScriptRef.
+	script := match.Script
+	if script.Script == "" && match.ScriptHash != "" {
+		fetched, err := fetcher.Script(ctx, match.ScriptHash)
+		if err != nil {
+			return common.Utxo{}, fmt.Errorf(
+				"failed to resolve reference script %s: %w",
+				match.ScriptHash,
+				err,
+			)
+		}
+		if fetched != nil {
+			script = *fetched
+		}
+	}
+	if script.Script != "" {
+		ref, err := kupoScriptToScriptRef(script, match.ScriptHash)
 		if err != nil {
 			return common.Utxo{}, fmt.Errorf(
 				"failed to parse script ref: %w",
@@ -130,7 +150,7 @@ func matchToUtxo(
 // verified against the datum hash before use; a mismatch fails closed.
 func fetchInlineDatumOption(
 	ctx context.Context,
-	datums datumFetcher,
+	datums chainFetcher,
 	datumHashHex string,
 ) (*babbage.BabbageTransactionOutputDatumOption, error) {
 	if datums == nil {
@@ -739,18 +759,18 @@ func (p *ogmiosProtocolParams) toProtocolParams() (backend.ProtocolParameters, e
 	}
 
 	pp := backend.ProtocolParameters{
-		MinFeeConstant:                   p.MinFeeConstant.Lovelace,
+		MinFeeConstant:                   p.MinFeeConstant.lovelace(),
 		MinFeeCoefficient:                p.MinFeeCoefficient,
 		MaxBlockSize:                     p.MaxBlockBodySize.Bytes,
 		MaxTxSize:                        p.MaxTxSize.Bytes,
 		MaxBlockHeaderSize:               p.MaxBlockHeaderSize.Bytes,
-		KeyDeposits:                      strconv.FormatInt(p.StakeKeyDeposit.Lovelace, 10),
-		PoolDeposits:                     strconv.FormatInt(p.PoolDeposit.Lovelace, 10),
+		KeyDeposits:                      strconv.FormatInt(p.StakeKeyDeposit.lovelace(), 10),
+		PoolDeposits:                     strconv.FormatInt(p.PoolDeposit.lovelace(), 10),
 		PoolInfluence:                    poolInfluence,
 		MonetaryExpansion:                monetaryExpansion,
 		TreasuryExpansion:                treasuryExpansion,
-		MinPoolCost:                      strconv.FormatInt(p.MinPoolCost.Lovelace, 10),
-		MinUtxo:                          strconv.FormatInt(p.MinUtxoConstant.Lovelace, 10),
+		MinPoolCost:                      strconv.FormatInt(p.MinPoolCost.lovelace(), 10),
+		MinUtxo:                          strconv.FormatInt(p.MinUtxoConstant.lovelace(), 10),
 		ProtocolMajorVersion:             p.Version.Major,
 		ProtocolMinorVersion:             p.Version.Minor,
 		PriceMem:                         priceMem,

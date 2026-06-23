@@ -110,16 +110,22 @@ type bfProtocolParams struct {
 	// max_tx_ex_mem, max_tx_ex_steps, max_block_ex_mem, max_block_ex_steps).
 	// The live BlockFrost API returns exactly these keys; do not switch to the
 	// long forms (e.g. max_tx_execution_units_memory), which unmarshal empty.
-	MaxTxExMem        string          `json:"max_tx_ex_mem"`
-	MaxTxExSteps      string          `json:"max_tx_ex_steps"`
-	MaxBlockExMem     string          `json:"max_block_ex_mem"`
-	MaxBlockExSteps   string          `json:"max_block_ex_steps"`
-	MaxValSize        string          `json:"max_val_size"`
-	CollateralPercent int64           `json:"collateral_percent"`
-	MaxCollateralIn   int64           `json:"max_collateral_inputs"`
-	CoinsPerUtxoWord  string          `json:"coins_per_utxo_word"`
-	CoinsPerUtxoSize  string          `json:"coins_per_utxo_size"`
-	CostModels        json.RawMessage `json:"cost_models"`
+	MaxTxExMem        string `json:"max_tx_ex_mem"`
+	MaxTxExSteps      string `json:"max_tx_ex_steps"`
+	MaxBlockExMem     string `json:"max_block_ex_mem"`
+	MaxBlockExSteps   string `json:"max_block_ex_steps"`
+	MaxValSize        string `json:"max_val_size"`
+	CollateralPercent int64  `json:"collateral_percent"`
+	MaxCollateralIn   int64  `json:"max_collateral_inputs"`
+	CoinsPerUtxoWord  string `json:"coins_per_utxo_word"`
+	CoinsPerUtxoSize  string `json:"coins_per_utxo_size"`
+	// CostModels is the named/keyed form ({"PlutusV1": {"addInteger-...": n}}).
+	// Its parameter ORDER is NOT the ledger's canonical positional order, so it
+	// must not be flattened by sorting parameter names. CostModelsRaw is the
+	// array form ({"PlutusV1": [n, ...]}) already in canonical ledger order and
+	// is preferred when present (required for correct local script evaluation).
+	CostModels    json.RawMessage `json:"cost_models"`
+	CostModelsRaw json.RawMessage `json:"cost_models_raw"`
 
 	MaximumReferenceScriptsSize      int `json:"maximum_reference_scripts_size"`
 	MinFeeReferenceScriptsRange      int `json:"min_fee_reference_scripts_range"`

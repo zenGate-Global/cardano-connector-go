@@ -47,8 +47,16 @@ type ogmiosProtocolParams struct {
 	CostModels         map[string][]int64     `json:"plutusCostModels"`
 }
 
+// ogmiosLovelace models an Ogmios v6 ada amount, which is nested as
+// {"ada":{"lovelace":N}}. The Lovelace accessor returns the inner value.
 type ogmiosLovelace struct {
-	Lovelace int64 `json:"lovelace"`
+	Ada struct {
+		Lovelace int64 `json:"lovelace"`
+	} `json:"ada"`
+}
+
+func (l ogmiosLovelace) lovelace() int64 {
+	return l.Ada.Lovelace
 }
 
 type ogmiosBytes struct {

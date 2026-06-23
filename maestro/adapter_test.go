@@ -234,3 +234,52 @@ func TestMergeMaestroProtocolParamsUsesPresetForMissingFields(t *testing.T) {
 		t.Fatalf("expected existing fields to be preserved, got %d", merged.MinFeeConstant)
 	}
 }
+
+// TestUnwrapMaestroScriptCborDoubleWrapped asserts that a double-CBOR-wrapped
+// script (Maestro's form) has exactly one byte-string layer stripped, yielding
+// the canonical single-wrapped form.
+func TestUnwrapMaestroScriptCborDoubleWrapped(t *testing.T) {
+	// Canonical single-wrapped Plutus script: a CBOR byte string wrapping raw
+	// (flat) UPLC bytes.
+	uplc := []byte{0x01, 0x00, 0x00, 0x22, 0x00, 0x11}
+	single, err := cbor.Encode(uplc)
+	if err != nil {
+		t.Fatalf("encode single: %v", err)
+	}
+	// Maestro's double wrap: an outer byte string around the canonical form.
+	double, err := cbor.Encode(single)
+	if err != nil {
+		t.Fatalf("encode double: %v", err)
+	}
+
+	got, err := unwrapMaestroScriptCbor(hex.EncodeToString(double))
+	if err != nil {
+		t.Fatalf("unwrapMaestroScriptCbor failed: %v", err)
+	}
+	if got != hex.EncodeToString(single) {
+		t.Fatalf("double-wrapped: got %s, want canonical single form %s", got, hex.EncodeToString(single))
+	}
+}
+
+// TestUnwrapMaestroScriptCborSingleWrappedUnchanged asserts that a canonical
+// single-wrapped script (the form Blockfrost/Kupo/the fixture use) is returned
+// unchanged, NOT over-stripped to raw UPLC.
+func TestUnwrapMaestroScriptCborSingleWrappedUnchanged(t *testing.T) {
+	// Raw UPLC must not begin with a CBOR byte-string major type (0x40-0x5f);
+	// 0x01 is a small unsigned int header, which is what real flat UPLC starts
+	// with, so it is correctly detected as "not a byte string".
+	uplc := []byte{0x01, 0x00, 0x00, 0x22, 0x00, 0x11}
+	single, err := cbor.Encode(uplc)
+	if err != nil {
+		t.Fatalf("encode single: %v", err)
+	}
+	singleHex := hex.EncodeToString(single)
+
+	got, err := unwrapMaestroScriptCbor(singleHex)
+	if err != nil {
+		t.Fatalf("unwrapMaestroScriptCbor failed: %v", err)
+	}
+	if got != singleHex {
+		t.Fatalf("single-wrapped form must be unchanged: got %s, want %s", got, singleHex)
+	}
+}

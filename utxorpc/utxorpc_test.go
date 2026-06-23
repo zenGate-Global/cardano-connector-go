@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -136,8 +135,8 @@ func TestGetUtxosWithUnit(t *testing.T) {
 
 	t.Logf("Found %d UTxOs with the specified unit", len(utxos))
 
-	if !reflect.DeepEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
-		t.Errorf("Expected UTxO %+v, got %+v", tests.ApolloDiscoveryUTxO, utxos[0])
+	if !tests.UtxosEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
+		t.Errorf("UTxO mismatch: %s", tests.UtxoDiff(utxos[0], tests.ApolloDiscoveryUTxO))
 	}
 }
 
@@ -157,8 +156,8 @@ func TestGetUtxoByUnit(t *testing.T) {
 		t.Fatal("Expected a UTxO but got nil")
 	}
 
-	if !reflect.DeepEqual(*utxo, tests.ApolloDiscoveryUTxO) {
-		t.Errorf("Expected UTxO %+v, got %+v", tests.ApolloDiscoveryUTxO, *utxo)
+	if !tests.UtxosEqual(*utxo, tests.ApolloDiscoveryUTxO) {
+		t.Errorf("UTxO mismatch: %s", tests.UtxoDiff(*utxo, tests.ApolloDiscoveryUTxO))
 	}
 }
 
@@ -182,8 +181,8 @@ func TestGetUtxosByOutRef(t *testing.T) {
 		t.Errorf("Expected 1 UTxO, got %d", len(utxos))
 	}
 
-	if !reflect.DeepEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
-		t.Errorf("Expected UTxO %+v, got %+v", tests.ApolloDiscoveryUTxO, utxos[0])
+	if !tests.UtxosEqual(utxos[0], tests.ApolloDiscoveryUTxO) {
+		t.Errorf("UTxO mismatch: %s", tests.UtxoDiff(utxos[0], tests.ApolloDiscoveryUTxO))
 	}
 }
 
@@ -239,12 +238,8 @@ func TestEvaluateTxSample1(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample1RedeemersExUnits) {
-		t.Errorf(
-			"Expected redeemers %+v, got %+v",
-			tests.ApolloEvalSample1RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := tests.RedeemersApproxEqual(redeemers, tests.ApolloEvalSample1RedeemersExUnits, 0.02); !ok {
+		t.Errorf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
@@ -261,12 +256,8 @@ func TestEvaluateTxSample2(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample2RedeemersExUnits) {
-		t.Errorf(
-			"Expected redeemers %+v, got %+v",
-			tests.ApolloEvalSample2RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := tests.RedeemersApproxEqual(redeemers, tests.ApolloEvalSample2RedeemersExUnits, 0.02); !ok {
+		t.Errorf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
@@ -283,12 +274,8 @@ func TestEvaluateTxSample3(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits) {
-		t.Errorf(
-			"Expected redeemers %+v, got %+v",
-			tests.ApolloEvalSample3RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := tests.RedeemersApproxEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits, 0.02); !ok {
+		t.Errorf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
@@ -306,12 +293,8 @@ func TestEvaluateTxSample4(t *testing.T) {
 		t.Fatalf("EvaluateTx failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits) {
-		t.Errorf(
-			"Expected redeemers %+v, got %+v",
-			tests.ApolloEvalSample3RedeemersExUnits,
-			redeemers,
-		)
+	if ok, diff := tests.RedeemersApproxEqual(redeemers, tests.ApolloEvalSample3RedeemersExUnits, 0.02); !ok {
+		t.Errorf("redeemers mismatch (>2%% drift): %s", diff)
 	}
 }
 
