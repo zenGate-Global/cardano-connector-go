@@ -16,9 +16,13 @@ type BlockfrostProvider struct {
 
 // --- BlockFrost evaluate-with-utxos request types ---
 //
-// /utils/txs/evaluate/utxos proxies Ogmios, so the additionalUtxoSet uses the
-// Ogmios-v5 [txIn, txOut] schema. The value is {coins, assets}; a bare datum
-// hash is "datumHash"; reference scripts are
+// /utils/txs/evaluate/utxos proxies Ogmios. The additionalUtxoSet uses the
+// [txIn, txOut] pair schema, but the txOut value must be in the Ogmios-v6
+// shape: {"ada": {"lovelace": N}, "<policyHex>": {"<assetNameHex>": N}}. (The
+// older {coins, assets:{"policyHex.assetNameHex": N}} shape is rejected by the
+// proxy with "failed to decode payload from base64 or base16" because the
+// "policyHex.assetNameHex" key is not valid base16.) A bare datum hash is
+// "datumHash"; reference scripts are
 // {"plutus:v1"|"plutus:v2"|"plutus:v3"|"plutus:v4": "<base16 script>"}.
 
 type bfTxIn struct {
@@ -26,12 +30,10 @@ type bfTxIn struct {
 	Index int    `json:"index"`
 }
 
-type bfValue struct {
-	Coins int64 `json:"coins"`
-	// Assets key is the policy ID hex for the empty asset name, otherwise
-	// policyHex + "." + assetNameHex.
-	Assets map[string]int64 `json:"assets,omitempty"`
-}
+// bfValue is the Ogmios-v6 value object. The "ada" entry carries lovelace under
+// "lovelace"; every other entry is keyed by policy id hex and maps asset name
+// hex (empty string for the empty asset name) to quantity.
+type bfValue map[string]map[string]int64
 
 type bfScriptRef struct {
 	PlutusV1 *string `json:"plutus:v1,omitempty"`

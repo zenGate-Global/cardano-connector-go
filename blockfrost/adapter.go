@@ -236,25 +236,25 @@ func bfAdditionalUtxoItemFromUtxo(utxo common.Utxo) (bfAdditionalUtxoItem, error
 	if err != nil {
 		return bfAdditionalUtxoItem{}, fmt.Errorf("invalid lovelace amount: %w", err)
 	}
-	val := bfValue{Coins: coins}
+	// Ogmios-v6 value: lovelace under "ada", then one entry per policy id hex
+	// mapping asset name hex (empty string for the empty name) to quantity.
+	val := bfValue{"ada": {"lovelace": coins}}
 	if assets := out.Assets(); assets != nil {
-		assetMap := make(map[string]int64)
 		for _, policyId := range assets.Policies() {
 			policyHex := hex.EncodeToString(policyId.Bytes())
 			for _, assetName := range assets.Assets(policyId) {
-				key := policyHex
-				if len(assetName) > 0 {
-					key = policyHex + "." + hex.EncodeToString(assetName)
-				}
 				qty, err := bigIntToInt64(assets.Asset(policyId, assetName))
 				if err != nil {
-					return bfAdditionalUtxoItem{}, fmt.Errorf("invalid asset quantity for %s: %w", key, err)
+					return bfAdditionalUtxoItem{}, fmt.Errorf(
+						"invalid asset quantity for %s.%s: %w",
+						policyHex, hex.EncodeToString(assetName), err,
+					)
 				}
-				assetMap[key] = qty
+				if val[policyHex] == nil {
+					val[policyHex] = make(map[string]int64)
+				}
+				val[policyHex][hex.EncodeToString(assetName)] = qty
 			}
-		}
-		if len(assetMap) > 0 {
-			val.Assets = assetMap
 		}
 	}
 
