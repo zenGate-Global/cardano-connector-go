@@ -212,13 +212,18 @@ func TestBuildAdditionalUtxoItemValueShape(t *testing.T) {
 
 	out2, ok := item[1].(bfTxOut)
 	assert.True(t, ok)
-	assert.Equal(t, int64(2_000_000), out2.Value.Coins)
-	assert.Equal(t, int64(42), out2.Value.Assets[policyHex+"."+assetNameHex])
+	// Ogmios-v6 value: lovelace under "ada", assets nested under the policy id hex.
+	assert.Equal(t, int64(2_000_000), out2.Value["ada"]["lovelace"])
+	assert.Equal(t, int64(42), out2.Value[policyHex][assetNameHex])
 
 	js, err := json.Marshal(out2)
 	assert.NoError(t, err)
-	assert.True(t, strings.Contains(string(js), `"coins"`),
-		"expected coins key, got: %s", string(js))
+	assert.True(t, strings.Contains(string(js), `"ada":{"lovelace":2000000}`),
+		"expected ada/lovelace value, got: %s", string(js))
+	assert.False(t, strings.Contains(string(js), `"coins"`),
+		"v5 coins key must not appear, got: %s", string(js))
+	assert.False(t, strings.Contains(string(js), policyHex+"."+assetNameHex),
+		"v5 dotted asset key must not appear, got: %s", string(js))
 }
 
 func mustDecodeHexT(t *testing.T, s string) []byte {
