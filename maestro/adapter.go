@@ -106,6 +106,12 @@ func adaptMaestroProtocolParams(
 		TreasuryExpansion:    treasuryExpansion,
 		ProtocolMajorVersion: protocolMajor,
 		ProtocolMinorVersion: protocolMinor,
+		// Conway reference-script fee inputs. Multiplier is deliberately not
+		// set: apollo's field is an int that cannot hold Maestro's 1.2, so
+		// leaving it zero lets apollo apply its 1.2 default.
+		MinFeeReferenceScriptsBase:  int(data.MinFeeReferenceScripts.Base),
+		MinFeeReferenceScriptsRange: int(data.MinFeeReferenceScripts.Range),
+		MaximumReferenceScriptsSize: int(data.MaxReferenceScriptsSize.Bytes),
 	}
 
 	// Parse cost models from Maestro response.

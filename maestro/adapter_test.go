@@ -174,6 +174,63 @@ func TestAdaptMaestroProtocolParamsMapsLiveRatioAndVersionFields(t *testing.T) {
 	}
 }
 
+// TestAdaptMaestroProtocolParamsMapsRefScriptFields asserts that the Conway
+// reference-script fee parameters Maestro supplies live (base/range and the
+// maximum reference-script size) are mapped into the apollo backend params, and
+// that the multiplier is intentionally left zero so apollo applies its 1.2
+// default (apollo's field is an int and cannot hold Maestro's fractional 1.2).
+func TestAdaptMaestroProtocolParamsMapsRefScriptFields(t *testing.T) {
+	data := baseMaestroParams()
+	data.PlutusCostModels = map[string]any{}
+	data.MinFeeReferenceScripts = models.MinFeeReferenceScripts{
+		Base:       15,
+		Range:      25600,
+		Multiplier: 1.2,
+	}
+	data.MaxReferenceScriptsSize = models.BytesSize{Bytes: 204800}
+
+	pp, err := adaptMaestroProtocolParams(data)
+	if err != nil {
+		t.Fatalf("adaptMaestroProtocolParams failed: %v", err)
+	}
+
+	if pp.MinFeeReferenceScriptsBase != 15 {
+		t.Errorf("MinFeeReferenceScriptsBase = %d, want 15", pp.MinFeeReferenceScriptsBase)
+	}
+	if pp.MinFeeReferenceScriptsRange != 25600 {
+		t.Errorf("MinFeeReferenceScriptsRange = %d, want 25600", pp.MinFeeReferenceScriptsRange)
+	}
+	if pp.MaximumReferenceScriptsSize != 204800 {
+		t.Errorf("MaximumReferenceScriptsSize = %d, want 204800", pp.MaximumReferenceScriptsSize)
+	}
+	// Multiplier must stay zero: Maestro's 1.2 does not fit apollo's int field,
+	// so the adapter leaves it unset and apollo falls back to its 1.2 default.
+	if pp.MinFeeReferenceScriptsMultiplier != 0 {
+		t.Errorf("MinFeeReferenceScriptsMultiplier = %d, want 0", pp.MinFeeReferenceScriptsMultiplier)
+	}
+
+	// Merging against the package preset must preserve the live values: the
+	// preset's ref-script fields are all zero (the multiplier preset bug that
+	// forced 15 is fixed), so live data always wins.
+	preset, err := resolveProtocolParamsPreset("mainnet")
+	if err != nil {
+		t.Fatalf("resolveProtocolParamsPreset failed: %v", err)
+	}
+	merged := mergeMaestroProtocolParams(pp, preset)
+	if merged.MinFeeReferenceScriptsBase != 15 {
+		t.Errorf("merged MinFeeReferenceScriptsBase = %d, want 15", merged.MinFeeReferenceScriptsBase)
+	}
+	if merged.MinFeeReferenceScriptsRange != 25600 {
+		t.Errorf("merged MinFeeReferenceScriptsRange = %d, want 25600", merged.MinFeeReferenceScriptsRange)
+	}
+	if merged.MaximumReferenceScriptsSize != 204800 {
+		t.Errorf("merged MaximumReferenceScriptsSize = %d, want 204800", merged.MaximumReferenceScriptsSize)
+	}
+	if merged.MinFeeReferenceScriptsMultiplier != 0 {
+		t.Errorf("merged MinFeeReferenceScriptsMultiplier = %d, want 0 (apollo default 1.2)", merged.MinFeeReferenceScriptsMultiplier)
+	}
+}
+
 // Cost-model shape coverage that previously lived in TestNormalizeMaestroCostModels
 // (apollo v1) is reimplemented against the v2 types in
 // TestAdaptMaestroProtocolParamsCostModels* below, which exercise

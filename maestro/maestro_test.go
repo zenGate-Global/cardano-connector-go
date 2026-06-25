@@ -60,8 +60,25 @@ func TestGetProtocolParameters(t *testing.T) {
 	if len(pp.CostModels["PlutusV2"]) == 0 {
 		t.Error("Expected non-empty PlutusV2 cost model")
 	}
-	if pp.MinFeeReferenceScriptsMultiplier == 0 {
-		t.Error("Expected non-zero MinFeeReferenceScriptsMultiplier")
+	// The Conway reference-script fee params must now be sourced live from
+	// Maestro: base and range are mapped through and the maximum ref-script
+	// size is populated, while the multiplier is intentionally left zero
+	// (apollo's int field cannot hold Maestro's fractional 1.2, so apollo
+	// applies its 1.2 default).
+	if pp.MinFeeReferenceScriptsBase == 0 {
+		t.Error("Expected non-zero MinFeeReferenceScriptsBase")
+	}
+	if pp.MinFeeReferenceScriptsRange == 0 {
+		t.Error("Expected non-zero MinFeeReferenceScriptsRange")
+	}
+	if pp.MaximumReferenceScriptsSize == 0 {
+		t.Error("Expected non-zero MaximumReferenceScriptsSize")
+	}
+	if pp.MinFeeReferenceScriptsMultiplier != 0 {
+		t.Errorf(
+			"Expected MinFeeReferenceScriptsMultiplier left zero (apollo default 1.2), got %d",
+			pp.MinFeeReferenceScriptsMultiplier,
+		)
 	}
 }
 

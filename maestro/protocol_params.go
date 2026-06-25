@@ -55,7 +55,7 @@ func newProtocolParamsPreset() backend.ProtocolParameters {
 		MaximumReferenceScriptsSize:      0,
 		MinFeeReferenceScriptsRange:      0,
 		MinFeeReferenceScriptsBase:       0,
-		MinFeeReferenceScriptsMultiplier: 15,
+		MinFeeReferenceScriptsMultiplier: 0,
 	}
 }
 
