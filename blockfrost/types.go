@@ -133,6 +133,13 @@ type bfProtocolParams struct {
 	MinFeeReferenceScriptsRange      int `json:"min_fee_reference_scripts_range"`
 	MinFeeReferenceScriptsBase       int `json:"min_fee_reference_scripts_base"`
 	MinFeeReferenceScriptsMultiplier int `json:"min_fee_reference_scripts_multiplier"`
+	// MinFeeRefScriptCostPerByte is the flat reference-script base price
+	// (lovelace per byte) that BlockFrost actually returns in
+	// /epochs/{n}/parameters. BlockFrost does NOT send the structured
+	// min_fee_reference_scripts_{base,range,multiplier} triple, so those fields
+	// above unmarshal to 0; this flat field carries the real value. apollo's
+	// RefScriptFeePerByte() falls back to it when the structured base is 0.
+	MinFeeRefScriptCostPerByte float64 `json:"min_fee_ref_script_cost_per_byte"`
 }
 
 type bfGenesisParams struct {

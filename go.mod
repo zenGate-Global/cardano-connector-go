@@ -58,4 +58,4 @@ require (
 
 replace github.com/maestro-org/go-sdk => github.com/mgpai22/maestro-cardano-go-sdk v1.4.0
 
-replace github.com/Salvionied/apollo/v2 => github.com/zenGate-Global/apollo/v2 v2.0.0-20260622225749-35b99c93f76c
+replace github.com/Salvionied/apollo/v2 => github.com/zenGate-Global/apollo/v2 v2.0.0-20260624043416-6d27a5261d3b

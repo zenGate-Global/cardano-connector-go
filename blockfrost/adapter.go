@@ -366,6 +366,7 @@ func (p *bfProtocolParams) toProtocolParams() (backend.ProtocolParameters, error
 		MinFeeReferenceScriptsRange:      p.MinFeeReferenceScriptsRange,
 		MinFeeReferenceScriptsBase:       p.MinFeeReferenceScriptsBase,
 		MinFeeReferenceScriptsMultiplier: p.MinFeeReferenceScriptsMultiplier,
+		MinFeeRefScriptCostPerByte:       p.MinFeeRefScriptCostPerByte,
 	}
 
 	// Cost models. The canonical ledger cost-model vector is a positional list
