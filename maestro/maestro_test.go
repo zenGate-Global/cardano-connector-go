@@ -60,6 +60,15 @@ func TestGetProtocolParameters(t *testing.T) {
 	if len(pp.CostModels["PlutusV2"]) == 0 {
 		t.Error("Expected non-empty PlutusV2 cost model")
 	}
+	// Regression: Maestro returns the per-tx execution-units step budget under
+	// the JSON key "cpu" (not "steps"). A wrong tag zeroes MaxTxExSteps and
+	// breaks local plutigo evaluation with "out of budget (cpu=0)".
+	if pp.MaxTxExSteps == "" || pp.MaxTxExSteps == "0" {
+		t.Errorf("Expected non-zero MaxTxExSteps (Maestro \"cpu\"), got %q", pp.MaxTxExSteps)
+	}
+	if pp.MaxTxExMem == "" || pp.MaxTxExMem == "0" {
+		t.Errorf("Expected non-zero MaxTxExMem, got %q", pp.MaxTxExMem)
+	}
 	// The Conway reference-script fee params must now be sourced live from
 	// Maestro: base and range are mapped through and the maximum ref-script
 	// size is populated, while the multiplier is intentionally left zero
