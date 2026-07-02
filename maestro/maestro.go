@@ -85,7 +85,7 @@ func (m *MaestroProvider) GetProtocolParameters(
 	if err != nil {
 		return backend.ProtocolParameters{}, fmt.Errorf(
 			"maestro: failed to get protocol parameters: %w",
-			err,
+			classifyMaestroErr(err),
 		)
 	}
 
@@ -114,7 +114,7 @@ func (m *MaestroProvider) GetTip(ctx context.Context) (connector.Tip, error) {
 	if err != nil {
 		return connector.Tip{}, fmt.Errorf(
 			"maestro: failed to get chain tip: %w",
-			err,
+			classifyMaestroErr(err),
 		)
 	}
 	return connector.Tip{
@@ -175,7 +175,7 @@ func (m *MaestroProvider) collectUtxos(
 	for range maxPages {
 		resp, err := m.client.UtxosAtAddress(addrStr, params)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("maestro: failed to get UTxOs for address %s: %w", addrStr, classifyMaestroErr(err))
 		}
 		for _, maestroUtxo := range resp.Data {
 			utxo, err := maestroUtxoToCommon(maestroUtxo, address)
@@ -207,7 +207,8 @@ func (m *MaestroProvider) GetScriptCborByScriptHash(
 ) (string, error) {
 	resp, err := m.client.ScriptByHash(scriptHash)
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
+		classified := classifyMaestroErr(err)
+		if errors.Is(classified, connector.ErrNotFound) {
 			return "", fmt.Errorf(
 				"maestro: script not found for hash %s: %w",
 				scriptHash,
@@ -217,7 +218,7 @@ func (m *MaestroProvider) GetScriptCborByScriptHash(
 		return "", fmt.Errorf(
 			"maestro: failed to get script by hash %s: %w",
 			scriptHash,
-			err,
+			classified,
 		)
 	}
 
@@ -294,7 +295,7 @@ func (m *MaestroProvider) GetUtxoByUnit(
 
 	resp, err := m.client.AddressHoldingAsset(unit, params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("maestro: failed to get address for unit %s: %w", unit, classifyMaestroErr(err))
 	}
 
 	if len(resp.Data) == 0 {
@@ -358,7 +359,7 @@ func (m *MaestroProvider) GetUtxosByOutRef(
 				"maestro: failed to get utxo %s#%d: %w",
 				ref.TxHash,
 				ref.Index,
-				err,
+				classifyMaestroErr(err),
 			)
 		}
 
@@ -402,7 +403,7 @@ func (m *MaestroProvider) GetDelegation(
 		return connector.Delegation{}, fmt.Errorf(
 			"maestro: failed to get account info for %s: %w",
 			stakeAddrStr,
-			err,
+			classifyMaestroErr(err),
 		)
 	}
 
@@ -411,7 +412,7 @@ func (m *MaestroProvider) GetDelegation(
 		return connector.Delegation{}, fmt.Errorf(
 			"maestro: failed to get block info while getting account info for %s: %w",
 			stakeAddrStr,
-			err,
+			classifyMaestroErr(err),
 		)
 	}
 
@@ -428,7 +429,7 @@ func (m *MaestroProvider) GetDatum(
 		return common.Datum{}, fmt.Errorf(
 			"maestro: failed to get datum by hash %s: %w",
 			datumHash,
-			err,
+			classifyMaestroErr(err),
 		)
 	}
 
@@ -474,18 +475,18 @@ func (m *MaestroProvider) AwaitTx(
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-ticker.C:
-			_, err := m.client.TransactionCbor(txHash)
-			if err != nil {
-				if strings.Contains(err.Error(), "404") {
-					continue // Not found yet, keep waiting
-				}
-				// Any other error is a failure.
-				return false, fmt.Errorf(
-					"maestro: error while checking tx status for %s: %w",
-					txHash,
-					err,
-				)
+		_, err := m.client.TransactionCbor(txHash)
+		if err != nil {
+			if errors.Is(err, maestroClient.ErrNotFound) {
+				continue // Not found yet, keep waiting
 			}
+			// Any other error is a failure.
+			return false, fmt.Errorf(
+				"maestro: error while checking tx status for %s: %w",
+				txHash,
+				classifyMaestroErr(err),
+			)
+		}
 			// If no error, the transaction is found and thus confirmed.
 			return true, nil
 		}
@@ -504,7 +505,7 @@ func (m *MaestroProvider) SubmitTx(
 	txHex := hex.EncodeToString(txBytes)
 	txHash, err := m.client.TxManagerSubmit(txHex)
 	if err != nil {
-		return "", fmt.Errorf("maestro: tx submission failed: %w", err)
+		return "", fmt.Errorf("maestro: tx submission failed: %w", classifyMaestroErr(err))
 	}
 	// The endpoint returns the tx hash as a plain-text body; tolerate JSON
 	// string quoting and surrounding whitespace.
@@ -536,7 +537,7 @@ func (m *MaestroProvider) EvaluateTx(
 	txHex := hex.EncodeToString(txBytes)
 	evaluation, err := m.client.EvaluateTx(txHex, addl...)
 	if err != nil {
-		return nil, err
+		return nil, classifyMaestroErr(err)
 	}
 	return evaluationsToExUnits(evaluation)
 }

@@ -420,7 +420,7 @@ func (p *PlutigoProvider) resolveInputs(
 		}
 		fetchedUtxos, err := p.resolver.GetUtxosByOutRef(ctx, neededRefs)
 		if err != nil {
-			return nil, nil, classifiedError(connector.ErrNotFound, "resolve transaction inputs", err)
+			return nil, nil, classifiedError(inferTransientKind(err, connector.ErrProviderInternal), "resolve transaction inputs", err)
 		}
 		for _, utxo := range fetchedUtxos {
 			if _, exists := resolvedInputs[utxo.Id.String()]; !exists {
@@ -506,7 +506,7 @@ func (p *PlutigoProvider) resolveProtocolParameters(
 		}
 		resolvedParams, err := p.resolver.GetProtocolParameters(ctx)
 		if err != nil {
-			return backend.ProtocolParameters{}, 0, 0, classifiedError(connector.ErrNotFound, "resolve protocol parameters", err)
+			return backend.ProtocolParameters{}, 0, 0, classifiedError(inferTransientKind(err, connector.ErrProviderInternal), "resolve protocol parameters", err)
 		}
 		params = resolvedParams
 	}
@@ -945,6 +945,22 @@ func supportedRedeemerTags() []lcommon.RedeemerTag {
 
 func notImplementedError(method string) error {
 	return classifiedError(connector.ErrNotImplemented, method+" is not supported by the plutigo provider", nil)
+}
+
+// inferTransientKind inspects err for a connector transient sentinel
+// (ErrRateLimited, ErrTimeout, ErrProviderInternal) and returns it so the
+// caller can propagate the real class instead of always using ErrNotFound.
+// Falls back to the provided defaultKind when no transient sentinel is found.
+func inferTransientKind(err error, defaultKind error) error {
+	switch {
+	case errors.Is(err, connector.ErrRateLimited):
+		return connector.ErrRateLimited
+	case errors.Is(err, connector.ErrTimeout):
+		return connector.ErrTimeout
+	case errors.Is(err, connector.ErrProviderInternal):
+		return connector.ErrProviderInternal
+	}
+	return defaultKind
 }
 
 func classifiedError(kind error, message string, err error) error {
