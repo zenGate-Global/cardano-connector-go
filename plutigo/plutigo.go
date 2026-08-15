@@ -662,7 +662,7 @@ func buildScriptPurpose(
 			err = classifiedError(connector.ErrInvalidInput, fmt.Sprintf("build script purpose: %v", r), nil)
 		}
 	}()
-	purpose = lscript.BuildScriptPurpose(
+	purpose, err = lscript.BuildScriptPurpose(
 		redeemerKey,
 		resolvedInputs,
 		inputs,
@@ -673,6 +673,9 @@ func buildScriptPurpose(
 		proposalProcedures,
 		witnessDatums,
 	)
+	if err != nil {
+		return nil, classifiedError(connector.ErrInvalidInput, "build script purpose", err)
+	}
 	return purpose, nil
 }
 
