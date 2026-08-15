@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.19.2
-	github.com/utxorpc/go-sdk v0.0.4
+	github.com/utxorpc/go-sdk v0.1.0
 )
 
 require (
