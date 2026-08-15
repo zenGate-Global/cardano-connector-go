@@ -136,7 +136,7 @@ func newTestMaestroProvider(t *testing.T, serverURL string) *MaestroProvider {
 func TestGetProtocolParameters_402_ClassifiesRateLimited(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusPaymentRequired) // 402
+		w.WriteHeader(http.StatusPaymentRequired)                  // 402
 		w.Write([]byte(`{"code":402,"message":"quota exceeded"}`)) //nolint:errcheck
 	}))
 	defer srv.Close()

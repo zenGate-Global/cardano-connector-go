@@ -475,18 +475,18 @@ func (m *MaestroProvider) AwaitTx(
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-ticker.C:
-		_, err := m.client.TransactionCbor(txHash)
-		if err != nil {
-			if errors.Is(err, maestroClient.ErrNotFound) {
-				continue // Not found yet, keep waiting
+			_, err := m.client.TransactionCbor(txHash)
+			if err != nil {
+				if errors.Is(err, maestroClient.ErrNotFound) {
+					continue // Not found yet, keep waiting
+				}
+				// Any other error is a failure.
+				return false, fmt.Errorf(
+					"maestro: error while checking tx status for %s: %w",
+					txHash,
+					classifyMaestroErr(err),
+				)
 			}
-			// Any other error is a failure.
-			return false, fmt.Errorf(
-				"maestro: error while checking tx status for %s: %w",
-				txHash,
-				classifyMaestroErr(err),
-			)
-		}
 			// If no error, the transaction is found and thus confirmed.
 			return true, nil
 		}
