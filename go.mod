@@ -9,7 +9,7 @@ require (
 	github.com/blinklabs-io/plutigo v0.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/maestro-org/go-sdk v1.2.1
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/tj/assert v0.0.3
 	github.com/utxorpc/go-codegen v0.19.2
 	github.com/utxorpc/go-sdk v0.1.0
@@ -28,7 +28,6 @@ require (
 	github.com/btcsuite/btcutil v1.0.2 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/consensys/gnark-crypto v0.20.1 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
@@ -36,7 +35,6 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.3 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
