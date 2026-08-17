@@ -30,14 +30,14 @@ jobs:
     outputs:
       VERSION: ${{ steps.output-version.outputs.VERSION }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           cache: false
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/go/pkg/mod
@@ -91,7 +91,7 @@ jobs:
       - id: output-version
         run: echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           enableCrossOsArchive: true
           key: release-artifacts-${{ github.run_id }}
@@ -107,9 +107,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           fail-on-cache-miss: true
           enableCrossOsArchive: true
@@ -141,11 +141,11 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           fail-on-cache-miss: true
           enableCrossOsArchive: true
