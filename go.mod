@@ -16,7 +16,7 @@ require (
 )
 
 require (
-	connectrpc.com/connect v1.20.0
+	connectrpc.com/connect v1.21.0
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Salvionied/apollo/v2 v2.0.0
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
